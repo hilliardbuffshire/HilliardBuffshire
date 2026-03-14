@@ -255,6 +255,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         if parsed.path == "/yf":
             ticker = (params.get("ticker", [None])[0] or "").upper().strip()
+            # Yahoo Finance uses hyphens for tickers like BRK-B, not dots (BRK.B)
+            ticker = ticker.replace(".", "-")
             if not ticker:
                 self._json(400, {"error": "ticker required"})
                 return
@@ -265,6 +267,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         elif parsed.path == "/chart":
             ticker = (params.get("ticker", [None])[0] or "").upper().strip()
+            ticker = ticker.replace(".", "-")
             range_ = params.get("range", ["6mo"])[0]
             if not ticker:
                 self._json(400, {"error": "ticker required"})

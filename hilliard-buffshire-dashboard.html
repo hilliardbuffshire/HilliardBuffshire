@@ -4,9 +4,12 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Hilliard Buffshire Investment Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box;}
-body{font-family:'Inter','Georgia',serif;background:#faf6f0;color:#1c1917;overflow-x:hidden;}
+body{font-family:'Inter','Noto Sans KR','Georgia',sans-serif;background:#faf6f0;color:#1c1917;overflow-x:hidden;}
 input,select,button{font-family:inherit;}
 ::-webkit-scrollbar{width:6px;height:6px;}
 ::-webkit-scrollbar-track{background:#f0e8db;}
@@ -1267,10 +1270,10 @@ const MiniStat = ({
   }
 }, /*#__PURE__*/React.createElement("div", {
   style: {
-    fontSize: 10,
+    fontSize: 12,
     color: C.textDim,
     textTransform: "uppercase",
-    letterSpacing: 1.2,
+    letterSpacing: 0.5,
     marginBottom: 4
   }
 }, label), /*#__PURE__*/React.createElement("div", {
@@ -1338,10 +1341,10 @@ const Th = ({
   style: {
     padding: "10px 8px",
     textAlign: "left",
-    fontSize: 9,
+    fontSize: 11,
     color: C.textMuted,
     textTransform: "uppercase",
-    letterSpacing: 0.8,
+    letterSpacing: 0.4,
     fontWeight: 600,
     whiteSpace: "nowrap"
   }
@@ -3520,7 +3523,7 @@ function Dashboard() {
       minHeight: "100vh",
       background: C.bg,
       color: C.text,
-      fontFamily: "'Inter','Georgia',serif"
+      fontFamily: "'Inter','Noto Sans KR','Georgia',sans-serif"
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {

@@ -519,7 +519,7 @@ const mapYFToStock = (ticker, data, chartData) => {
     seasonal: "neutral",
     pricePattern: "neutral",
     fromApi: true,
-    apiSource: "Yahoo Finance",
+    apiSource: "Live",
     _meta: {
       marketCap,
       freeCashflow,
@@ -625,7 +625,7 @@ const HelpTip = ({
   })));
 };
 const TIPS = {
-  mos: "MoS (Margin of Safety)\n= (DCF Intrinsic - Price) / DCF Intrinsic × 100\n\nDCF is self-calculated from:\n- FCF from Yahoo Finance (free)\n- Growth rate = earnings growth\n- WACC = 4.3% + Beta × 5%\n- 10yr projection + terminal value",
+  mos: "MoS (Margin of Safety)\n= (DCF Intrinsic - Price) / DCF Intrinsic × 100\n\nDCF is self-calculated from:\n- Free Cash Flow\n- Growth rate = earnings growth\n- WACC = 4.3% + Beta × 5%\n- 10yr projection + terminal value",
   val: "Valuation Score (0-100)\n- EV/EBIT (20pts)\n- DCF MoS (18pts)\n- P/FCF (15pts)\n- Owner Earnings (15pts)\n- FCF Growth (12pts)\n- PEG (10pts)\n- Graham# (10pts)",
   qual: "Quality Score (0-100)\n- ROE (20pts)\n- ROIC (18pts)\n- D/E (15pts)\n- FCF Yield (15pts)\n- Gross Margin (15pts)\n- Moat (17pts)",
   quant: "Quant Score (0-100)\n- Williams %R (20pts)\n- A/D Line (15pts)\n- Momentum (15pts)\n- Sentiment (15pts)\n- COT (15pts)\n- 6m Price Mom (10pts)\n- Pattern (10pts)",
@@ -633,11 +633,11 @@ const TIPS = {
   signal: "Strong Buy (80+): 15-20%\nBuy (65-79): 10-15%\nNeutral (50-64): 5-10%\nWatch (35-49): 0-5%\nSell (<35 or 2+): exit",
   fairValue: "Fair Value = Self-calculated DCF\nFCF × (1+g)^t / (1+r)^t summed 10yrs\n+ Terminal Value (Gordon Growth)\nWACC estimated from Beta + risk-free rate",
   sell: "2+ simultaneous = auto-Sell.\nROE<12%, D/E>1.2, Margin<35%, ROIC<7%, FCF Yield<1%, %R overbought, Sentiment>75, Overvalued>10%, EV/EBIT>25x",
-  evEbit: "EV/EBIT: Best single-factor backtest\n15.34% CAGR, Sharpe 0.79\nEV/EBIT < 10x = undervalued\n\nSelf-calc: EV from Yahoo Finance / EBIT from income statement",
-  pFcf: "P/FCF = MarketCap / FreeCashflow\n< 10 = undervalued\n10-20 = fair\n> 25 = overvalued\n\nBoth from Yahoo Finance (free)",
-  graham: "Graham# = √(22.5 × EPS × BookValue)\nPrice < Graham# = undervalued\n\nEPS & BookValue from Yahoo Finance",
-  peg: "PEG = P/E / EarningsGrowth%\n< 0.8 deep value, 1.0 fair, > 2.0 expensive\n\nDirect from Yahoo Finance defaultKeyStatistics",
-  ownerE: "Owner Earnings Yield\n≈ FCF × 0.85 / MarketCap\nBuffett's preferred metric.\n\nFCF from Yahoo Finance cash flow statement",
+  evEbit: "EV/EBIT: Best single-factor backtest\n15.34% CAGR, Sharpe 0.79\nEV/EBIT < 10x = undervalued\n\nSelf-calculated from financial statements",
+  pFcf: "P/FCF = MarketCap / FreeCashflow\n< 10 = undervalued\n10-20 = fair\n> 25 = overvalued",
+  graham: "Graham# = √(22.5 × EPS × BookValue)\nPrice < Graham# = undervalued",
+  peg: "PEG = P/E / EarningsGrowth%\n< 0.8 deep value, 1.0 fair, > 2.0 expensive",
+  ownerE: "Owner Earnings Yield\n≈ FCF × 0.85 / MarketCap\nBuffett's preferred metric.",
   fcfShare: "FCF/Share = FreeCashflow / SharesOutstanding\n\nvs index averages:\n- S&P 500 avg: ~$18.50\n- NASDAQ 100 avg: ~$14.20\n- Dow 30 avg: ~$22.80"
 };
 const getTier = (composite, sellFlags) => {
@@ -2877,7 +2877,7 @@ const MarketOverview = () => {
       fontSize: 12,
       marginBottom: 16
     }
-  }, "\uD83D\uDCE1 Market data via ", /*#__PURE__*/React.createElement("b", null, "Yahoo Finance"), " (free, no API key needed). Click \"Refresh Market\" for live index prices."), /*#__PURE__*/React.createElement(Card, {
+  }, "\uD83D\uDCE1 Click \"Refresh Market\" for live index prices."), /*#__PURE__*/React.createElement(Card, {
     style: {
       marginBottom: 20,
       padding: 14,
@@ -3048,7 +3048,7 @@ const MarketOverview = () => {
   }))))))));
 };
 
-// ── TICKER SEARCH (Yahoo Finance) ─────────────────────────────
+// ── TICKER SEARCH ─────────────────────────────────────────────
 const TickerSearch = ({
   onSelect,
   stocks,
@@ -3405,6 +3405,9 @@ const TickerSearch = ({
 // ═══════════════════════════════════════════════════════════════
 function Dashboard() {
   const [tab, setTab] = useState("screener");
+  const [lang, setLang] = useState("EN");
+  const L = lang === "KR";
+  const sortBy_init = "composite";
   const [sortBy, setSortBy] = useState("composite");
   const [sectorFilter, setSectorFilter] = useState("All");
   const [tierFilter, setTierFilter] = useState("All");
@@ -3447,7 +3450,7 @@ function Dashboard() {
     }));
     setStocks(updated);
     setLastRefresh(new Date().toLocaleTimeString());
-    setApiMsg("✓ " + ok + " updated" + (fail > 0 ? ", " + fail + " failed" : "") + " — DCF self-calculated from real FCF data");
+    setApiMsg("✓ " + ok + " updated" + (fail > 0 ? ", " + fail + " failed" : ""));
     setRefreshing(false);
   };
   const enriched = useMemo(() => stocks.map(s => {
@@ -3591,14 +3594,7 @@ function Dashboard() {
       background: "linear-gradient(90deg," + C.gold + "00," + C.goldBright + "," + C.gold + "00)",
       width: 320
     }
-  }), /*#__PURE__*/React.createElement("p", {
-    style: {
-      margin: "6px 0 0",
-      fontSize: 10,
-      color: "#a8a29e",
-      letterSpacing: 0.8
-    }
-  }, "Multi-Factor Value + Quant"))), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       flexDirection: "column",
@@ -3630,6 +3626,19 @@ function Dashboard() {
       color: "#a8a29e"
     }
   }, "Updated: ", lastRefresh), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setLang(L ? "EN" : "KR"),
+    style: {
+      padding: "6px 12px",
+      borderRadius: 6,
+      border: "1px solid " + C.gold + "88",
+      background: L ? "linear-gradient(135deg," + C.gold + "," + C.goldBright + ")" : "transparent",
+      color: L ? "#fff" : C.gold,
+      fontSize: 11,
+      fontWeight: 700,
+      cursor: "pointer",
+      letterSpacing: 1
+    }
+  }, L ? "KR" : "EN"), /*#__PURE__*/React.createElement("button", {
     onClick: refreshAllStocks,
     disabled: refreshing,
     style: {
@@ -3670,14 +3679,14 @@ function Dashboard() {
       padding: 14
     }
   }, /*#__PURE__*/React.createElement(MiniStat, {
-    label: "Total",
+    label: L ? "전체" : "Total",
     value: enriched.length
   })), /*#__PURE__*/React.createElement(Card, {
     style: {
       padding: 14
     }
   }, /*#__PURE__*/React.createElement(MiniStat, {
-    label: "Strong Buy",
+    label: L ? "강력매수" : "Strong Buy",
     value: enriched.filter(s => s.tier.tier === "Strong Buy").length,
     color: C.emerald
   })), /*#__PURE__*/React.createElement(Card, {
@@ -3685,7 +3694,7 @@ function Dashboard() {
       padding: 14
     }
   }, /*#__PURE__*/React.createElement(MiniStat, {
-    label: "Buy",
+    label: L ? "매수" : "Buy",
     value: enriched.filter(s => s.tier.tier === "Buy").length,
     color: C.emeraldLight
   })), /*#__PURE__*/React.createElement(Card, {
@@ -3693,7 +3702,7 @@ function Dashboard() {
       padding: 14
     }
   }, /*#__PURE__*/React.createElement(MiniStat, {
-    label: "Neutral",
+    label: L ? "중립" : "Neutral",
     value: enriched.filter(s => s.tier.tier === "Neutral").length,
     color: C.orange
   })), /*#__PURE__*/React.createElement(Card, {
@@ -3701,7 +3710,7 @@ function Dashboard() {
       padding: 14
     }
   }, /*#__PURE__*/React.createElement(MiniStat, {
-    label: "Sell Signals",
+    label: L ? "매도신호" : "Sell Signals",
     value: enriched.filter(s => s.sellSignals.length >= 2).length,
     color: C.crimson
   })), /*#__PURE__*/React.createElement(Card, {
@@ -3709,7 +3718,7 @@ function Dashboard() {
       padding: 14
     }
   }, /*#__PURE__*/React.createElement(MiniStat, {
-    label: "Avg MoS",
+    label: L ? "평균안전마진" : "Avg MoS",
     value: (() => { const valid = enriched.map(b => parseFloat(b.mos)).filter(n => isFinite(n)); return valid.length ? (valid.reduce((a, n) => a + n, 0) / valid.length).toFixed(1) + "%" : "N/A"; })(),
     color: C.emerald
   }))), /*#__PURE__*/React.createElement(Card, {
@@ -3798,25 +3807,25 @@ function Dashboard() {
       borderBottom: "2px solid " + C.border,
       background: C.goldBg
     }
-  }, /*#__PURE__*/React.createElement(Th, null, "#"), /*#__PURE__*/React.createElement(Th, null, "Ticker"), /*#__PURE__*/React.createElement(Th, null, "Sector"), /*#__PURE__*/React.createElement(Th, null, "Price"), /*#__PURE__*/React.createElement(Th, {
+  }, /*#__PURE__*/React.createElement(Th, null, "#"), /*#__PURE__*/React.createElement(Th, null, L?"종목":"Ticker"), /*#__PURE__*/React.createElement(Th, null, L?"섹터":"Sector"), /*#__PURE__*/React.createElement(Th, null, L?"현재가":"Price"), /*#__PURE__*/React.createElement(Th, {
     tip: TIPS.fairValue
-  }, "Fair Val"), /*#__PURE__*/React.createElement(Th, {
+  }, L?"적정가":"Fair Val"), /*#__PURE__*/React.createElement(Th, {
     tip: TIPS.mos
-  }, "MoS"), /*#__PURE__*/React.createElement(Th, {
+  }, L?"안전마진":"MoS"), /*#__PURE__*/React.createElement(Th, {
     tip: TIPS.fcfShare
-  }, "FCF/Shr"), /*#__PURE__*/React.createElement(Th, {
+  }, L?"FCF/주":"FCF/Shr"), /*#__PURE__*/React.createElement(Th, {
     tip: TIPS.val
-  }, "Val"), /*#__PURE__*/React.createElement(Th, {
+  }, L?"가치":"Val"), /*#__PURE__*/React.createElement(Th, {
     tip: TIPS.qual
-  }, "Qual"), /*#__PURE__*/React.createElement(Th, {
+  }, L?"품질":"Qual"), /*#__PURE__*/React.createElement(Th, {
     tip: TIPS.quant
-  }, "Quant"), /*#__PURE__*/React.createElement(Th, {
+  }, L?"퀀트":"Quant"), /*#__PURE__*/React.createElement(Th, {
     tip: TIPS.composite
-  }, "Score"), /*#__PURE__*/React.createElement(Th, {
+  }, L?"점수":"Score"), /*#__PURE__*/React.createElement(Th, {
     tip: TIPS.signal
-  }, "Signal"), /*#__PURE__*/React.createElement(Th, {
+  }, L?"신호":"Signal"), /*#__PURE__*/React.createElement(Th, {
     tip: TIPS.sell
-  }, "Sell"))), /*#__PURE__*/React.createElement("tbody", null, filtered.map((s, i) => {
+  }, L?"매도":"Sell"))), /*#__PURE__*/React.createElement("tbody", null, filtered.map((s, i) => {
     const fcfPS = s.fcfPS;
     const spDiff = (fcfPS - IDX_FCF.sp500) / IDX_FCF.sp500 * 100;
     return /*#__PURE__*/React.createElement("tr", {
@@ -4159,14 +4168,14 @@ function Dashboard() {
       fontWeight: 700,
       margin: "0 0 10px"
     }
-  }, "Data Source: Yahoo Finance (Free)"), /*#__PURE__*/React.createElement("p", {
+  }, "Data Sources"), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: C.textMid,
       lineHeight: 1.8,
       margin: 0
     }
-  }, "All financial data fetched from Yahoo Finance at no cost \u2014 no API key required.", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "ROE, ROIC, D/E, Gross Margin, FCF Yield, P/FCF, EV/EBIT, PEG"), ": pulled directly from YF financial statements", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "DCF Intrinsic Value"), ": self-calculated from FCF (cash flow statement), growth rate (earnings growth), WACC (4.3% + Beta\xD75%)", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "Graham Number"), ": \u221A(22.5 \xD7 EPS \xD7 Book Value) \u2014 both from YF", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "6-month Momentum"), ": calculated from YF price chart data")), /*#__PURE__*/React.createElement(Card, {
+  }, "All financial data is fetched in real-time from market data providers.", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "ROE, ROIC, D/E, Gross Margin, FCF Yield, P/FCF, EV/EBIT, PEG"), ": pulled from financial statements", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "DCF Intrinsic Value"), ": self-calculated from FCF, earnings growth rate, WACC (4.3% + Beta\xD75%)", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "Graham Number"), ": \u221A(22.5 \xD7 EPS \xD7 Book Value)", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "6-month Momentum"), ": calculated from price chart data")), /*#__PURE__*/React.createElement(Card, {
     style: {
       marginBottom: 18
     }

@@ -3457,7 +3457,9 @@ function Dashboard() {
     const composite = computeComposite(val, qual, q);
     const sellSig = detectSellSignals(s);
     const tier = getTier(composite, sellSig);
-    const mos = ((s.dcfIntrinsic - s.price) / s.dcfIntrinsic * 100).toFixed(1);
+    const mos = (s.dcfIntrinsic && s.dcfIntrinsic > 0 && s.price > 0)
+      ? ((s.dcfIntrinsic - s.price) / s.dcfIntrinsic * 100).toFixed(1)
+      : "0.0";
     const fcfPS = calcFcfPerShare(s);
     return {
       ...s,
@@ -3596,7 +3598,7 @@ function Dashboard() {
       color: "#a8a29e",
       letterSpacing: 0.8
     }
-  }, "Multi-Factor Value + Quant \xB7 Buffett + Ackman + Williams"))), /*#__PURE__*/React.createElement("div", {
+  }, "Multi-Factor Value + Quant"))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       flexDirection: "column",
@@ -3708,7 +3710,7 @@ function Dashboard() {
     }
   }, /*#__PURE__*/React.createElement(MiniStat, {
     label: "Avg MoS",
-    value: (enriched.reduce((a, b) => a + parseFloat(b.mos), 0) / enriched.length).toFixed(1) + "%",
+    value: (() => { const valid = enriched.map(b => parseFloat(b.mos)).filter(n => isFinite(n)); return valid.length ? (valid.reduce((a, n) => a + n, 0) / valid.length).toFixed(1) + "%" : "N/A"; })(),
     color: C.emerald
   }))), /*#__PURE__*/React.createElement(Card, {
     style: {

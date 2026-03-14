@@ -487,11 +487,12 @@ const mapYFToStock = (ticker, data, chartData) => {
     }
   }
 
-  // Self-calculated DCF
+  // Self-calculated DCF — uses 10% fixed discount rate (target return benchmark)
+  // aligned with standard value-investing practice (S&P avg 8-10%, target 10-15%)
   const fcfGrowthRate = fd.earningsGrowth?.raw || 0.08;
-  // WACC estimate: risk-free(4.3%) + beta * equity premium(5%) + debt component
-  const wacc = 0.043 + (beta || 1) * 0.05;
-  const dcfIntrinsic = calcDCF(freeCashflow, Math.max(0.02, Math.min(0.30, fcfGrowthRate)), Math.max(0.07, Math.min(0.15, wacc)), 0.025, 10, sharesOutstanding) || Math.round(price * 1.2);
+  const discountRate = 0.10; // 10% fixed target return (per DCF best practice)
+  const cappedGrowthRate = Math.max(0.02, Math.min(0.12, fcfGrowthRate)); // max 12% cap — prevents unrealistic values for high-growth quarters
+  const dcfIntrinsic = calcDCF(freeCashflow, cappedGrowthRate, discountRate, 0.025, 10, sharesOutstanding) || Math.round(price * 1.2);
   return {
     ticker: ticker.toUpperCase(),
     name: ap.longName || ap.shortName || ticker,
@@ -529,7 +530,7 @@ const mapYFToStock = (ticker, data, chartData) => {
       ebit,
       totalRevenue,
       grossProfit,
-      wacc,
+      discountRate,
       sharesOutstanding
     }
   };
@@ -628,13 +629,13 @@ const HelpTip = ({
   })));
 };
 const TIPS = {
-  mos: "MoS (Margin of Safety)\n= (DCF Intrinsic - Price) / DCF Intrinsic × 100\n\nDCF is self-calculated from:\n- Free Cash Flow\n- Growth rate = earnings growth\n- WACC = 4.3% + Beta × 5%\n- 10yr projection + terminal value",
+  mos: "MoS (Margin of Safety)\n= (DCF Intrinsic - Price) / DCF Intrinsic × 100\n\nDCF is self-calculated from:\n- Free Cash Flow\n- Growth rate = earnings growth (capped 2–12%)\n- Discount Rate = 10% (target return)\n- 10yr projection + terminal value (Gordon Growth)",
   val: "Valuation Score (0-100)\n- EV/EBIT (20pts)\n- DCF MoS (18pts)\n- P/FCF (15pts)\n- Owner Earnings (15pts)\n- FCF Growth (12pts)\n- PEG (10pts)\n- Graham# (10pts)",
   qual: "Quality Score (0-100)\n- ROE (20pts)\n- ROIC (18pts)\n- D/E (15pts)\n- FCF Yield (15pts)\n- Gross Margin (15pts)\n- Moat (17pts)",
   quant: "Quant Score (0-100)\n- Williams %R (20pts)\n- A/D Line (15pts)\n- Momentum (15pts)\n- Sentiment (15pts)\n- COT (15pts)\n- 6m Price Mom (10pts)\n- Pattern (10pts)",
   composite: "Composite = Val×35% + Qual×25% + Quant×40%",
   signal: "Strong Buy (80+): 15-20%\nBuy (65-79): 10-15%\nNeutral (50-64): 5-10%\nWatch (35-49): 0-5%\nSell (<35 or 2+): exit",
-  fairValue: "Fair Value = Self-calculated DCF\nFCF × (1+g)^t / (1+r)^t summed 10yrs\n+ Terminal Value (Gordon Growth)\nWACC estimated from Beta + risk-free rate",
+  fairValue: "Fair Value = Self-calculated DCF\nFCF × (1+g)^t / (1+r)^t summed 10yrs\n+ Terminal Value (Gordon Growth)\nDiscount Rate: 10% fixed (target return)\nGrowth Rate: earnings growth, capped 2–12%",
   sell: "2+ simultaneous = auto-Sell.\nROE<12%, D/E>1.2, Margin<35%, ROIC<7%, FCF Yield<1%, %R overbought, Sentiment>75, Overvalued>10%, EV/EBIT>25x",
   evEbit: "EV/EBIT: Best single-factor backtest\n15.34% CAGR, Sharpe 0.79\nEV/EBIT < 10x = undervalued\n\nSelf-calculated from financial statements",
   pFcf: "P/FCF = MarketCap / FreeCashflow\n< 10 = undervalued\n10-20 = fair\n> 25 = overvalued",
@@ -3415,15 +3416,37 @@ function Dashboard() {
   const [sectorFilter, setSectorFilter] = useState("All");
   const [tierFilter, setTierFilter] = useState("All");
   const [selected, setSelected] = useState(null);
-  const [stocks, setStocks] = useState(DEFAULT_STOCKS);
+  const [stocks, setStocks] = useState(() => {
+    try {
+      const saved = localStorage.getItem("hb-watchlist");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {}
+    return DEFAULT_STOCKS;
+  });
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [apiMsg, setApiMsg] = useState("");
+  const [editMode, setEditMode] = useState(false);
+  // Persist watchlist to localStorage whenever it changes
+  useEffect(() => {
+    try { localStorage.setItem("hb-watchlist", JSON.stringify(stocks)); } catch(e) {}
+  }, [stocks]);
   const addStockToList = useCallback(rawStock => {
     setStocks(prev => {
       if (prev.find(s => s.ticker === rawStock.ticker)) return prev;
       return [...prev, rawStock];
     });
+  }, []);
+  const removeStockFromList = useCallback(ticker => {
+    setStocks(prev => prev.filter(s => s.ticker !== ticker));
+  }, []);
+  const resetWatchlist = useCallback(() => {
+    if (window.confirm("기본 워치리스트로 초기화하시겠습니까?")) {
+      setStocks(DEFAULT_STOCKS);
+    }
   }, []);
   const refreshAllStocks = async () => {
     setRefreshing(true);
@@ -3655,7 +3678,34 @@ function Dashboard() {
       cursor: refreshing ? "wait" : "pointer",
       opacity: refreshing ? 0.6 : 1
     }
-  }, refreshing ? "Refreshing..." : "Refresh Data")), apiMsg && /*#__PURE__*/React.createElement("span", {
+  }, refreshing ? "Refreshing..." : "Refresh Data"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setEditMode(m => !m),
+    style: {
+      padding: "6px 14px",
+      borderRadius: 6,
+      border: "1px solid " + (editMode ? C.crimsonLight : C.blueFrost) + "88",
+      background: editMode ? C.crimsonLight + "22" : "transparent",
+      color: editMode ? C.crimsonLight : C.blueFrost,
+      fontSize: 11,
+      fontWeight: 700,
+      cursor: "pointer",
+      letterSpacing: 0.5
+    }
+  }, editMode ? (L ? "✓ 편집완료" : "✓ Done") : (L ? "✏ 편집" : "✏ Edit"), /*#__PURE__*/React.createElement("span", {
+    style: { fontSize: 9, marginLeft: 4, opacity: 0.7 }
+  }, L ? "워치리스트" : "Watchlist")), editMode && /*#__PURE__*/React.createElement("button", {
+    onClick: resetWatchlist,
+    title: L ? "기본 워치리스트로 초기화" : "Reset to default watchlist",
+    style: {
+      padding: "6px 10px",
+      borderRadius: 6,
+      border: "1px solid #666",
+      background: "transparent",
+      color: "#888",
+      fontSize: 10,
+      cursor: "pointer"
+    }
+  }, L ? "초기화" : "Reset")), apiMsg && /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 10,
       color: apiMsg.includes("✓") ? C.emeraldLight : C.crimsonLight,
@@ -3820,7 +3870,7 @@ function Dashboard() {
     tip: TIPS.val
   }, L?"가치":"Val"), /*#__PURE__*/React.createElement(Th, {
     tip: TIPS.qual
-  }, L?"품질":"Qual"), /*#__PURE__*/React.createElement(Th, {
+  }, L?"재무건전성":"Qual"), /*#__PURE__*/React.createElement(Th, {
     tip: TIPS.quant
   }, L?"퀀트":"Quant"), /*#__PURE__*/React.createElement(Th, {
     tip: TIPS.composite
@@ -3828,15 +3878,15 @@ function Dashboard() {
     tip: TIPS.signal
   }, L?"신호":"Signal"), /*#__PURE__*/React.createElement(Th, {
     tip: TIPS.sell
-  }, L?"매도":"Sell"))), /*#__PURE__*/React.createElement("tbody", null, filtered.map((s, i) => {
+  }, L?"매도":"Sell"), editMode && /*#__PURE__*/React.createElement(Th, null, L?"삭제":"Del"))), /*#__PURE__*/React.createElement("tbody", null, filtered.map((s, i) => {
     const fcfPS = s.fcfPS;
     const spDiff = (fcfPS - IDX_FCF.sp500) / IDX_FCF.sp500 * 100;
     return /*#__PURE__*/React.createElement("tr", {
       key: s.ticker,
-      onClick: () => setSelected(s),
+      onClick: editMode ? undefined : () => setSelected(s),
       style: {
         borderBottom: "1px solid " + C.borderLight,
-        cursor: "pointer"
+        cursor: editMode ? "default" : "pointer"
       },
       onMouseEnter: e => e.currentTarget.style.background = C.cardHover,
       onMouseLeave: e => e.currentTarget.style.background = "transparent"
@@ -3979,7 +4029,22 @@ function Dashboard() {
       }
     }, s.sellSignals.length > 0 && /*#__PURE__*/React.createElement(Badge, {
       color: C.crimson
-    }, s.sellSignals.length)));
+    }, s.sellSignals.length)), editMode && /*#__PURE__*/React.createElement("td", {
+      style: { padding: "10px 6px" },
+      onClick: e => { e.stopPropagation(); removeStockFromList(s.ticker); }
+    }, /*#__PURE__*/React.createElement("button", {
+      style: {
+        padding: "3px 8px",
+        borderRadius: 4,
+        border: "1px solid " + C.crimsonLight,
+        background: C.crimsonLight + "22",
+        color: C.crimsonLight,
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: "pointer",
+        lineHeight: 1
+      }
+    }, "✕")));
   }))))), tab === "valuation" && /*#__PURE__*/React.createElement(ValuationTab, null), tab === "portfolio" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "grid",
@@ -4178,7 +4243,7 @@ function Dashboard() {
       lineHeight: 1.8,
       margin: 0
     }
-  }, "All financial data is fetched in real-time from market data providers.", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "ROE, ROIC, D/E, Gross Margin, FCF Yield, P/FCF, EV/EBIT, PEG"), ": pulled from financial statements", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "DCF Intrinsic Value"), ": self-calculated from FCF, earnings growth rate, WACC (4.3% + Beta\xD75%)", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "Graham Number"), ": \u221A(22.5 \xD7 EPS \xD7 Book Value)", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "6-month Momentum"), ": calculated from price chart data")), /*#__PURE__*/React.createElement(Card, {
+  }, "All financial data is fetched in real-time from market data providers.", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "ROE, ROIC, D/E, Gross Margin, FCF Yield, P/FCF, EV/EBIT, PEG"), ": pulled from financial statements", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "DCF Intrinsic Value"), ": self-calculated from FCF, earnings growth rate (capped 2\u201312%), discount rate 10%", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "Graham Number"), ": \u221A(22.5 \xD7 EPS \xD7 Book Value)", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "6-month Momentum"), ": calculated from price chart data")), /*#__PURE__*/React.createElement(Card, {
     style: {
       marginBottom: 18
     }

@@ -246,6 +246,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         params = urllib.parse.parse_qs(parsed.query)
 
+        # Root URL → redirect directly to dashboard
+        if parsed.path == "/" or parsed.path == "":
+            self.send_response(302)
+            self.send_header("Location", "/hilliard-buffshire-dashboard.html")
+            self.end_headers()
+            return
+
         if parsed.path == "/yf":
             ticker = (params.get("ticker", [None])[0] or "").upper().strip()
             if not ticker:

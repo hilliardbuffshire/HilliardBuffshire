@@ -535,12 +535,41 @@ const mapYFToStock = (ticker, data, chartData) => {
     }
   }
 
-  // Self-calculated DCF — uses 10% fixed discount rate (target return benchmark)
-  // aligned with standard value-investing practice (S&P avg 8-10%, target 10-15%)
-  const fcfGrowthRate = fd.earningsGrowth?.raw || 0.08;
-  const discountRate = 0.10; // 10% fixed target return (per DCF best practice)
-  const cappedGrowthRate = Math.max(0.02, Math.min(0.12, fcfGrowthRate)); // max 12% cap — prevents unrealistic values for high-growth quarters
-  const dcfIntrinsic = calcDCF(freeCashflow, cappedGrowthRate, discountRate, 0.025, 10, sharesOutstanding) || Math.round(price * 1.2);
+  // ── Owner Earnings DCF (Excel 템플릿 공식) ──────────────────
+  // Owner Earnings = Operating CF - Maintenance CapEx
+  // Maintenance CapEx = Total CapEx × maintenance ratio
+  // (성장주: 유지보수 CAPEX 비중 낮음, 성숙주: 높음)
+  const operatingCF   = fd.operatingCashflow?.raw || 0;
+  const totalCapex    = fd.capitalExpenditures?.raw || 0;
+  const totalCashBal  = fd.totalCash?.raw || 0;
+  const revenueGrowth = fd.revenueGrowth?.raw || 0;
+  const earningsGrowth = fd.earningsGrowth?.raw || 0;
+
+  // Maintenance CapEx ratio: 성장주(PE>40)는 15%, 중간(PE 20-40)은 35%, 성숙주(PE<20)는 55%
+  const peForRatio = (sd.trailingPE?.raw || ks.forwardPE?.raw || 20);
+  const maintenanceRatio = peForRatio > 40 ? 0.15 : peForRatio > 20 ? 0.35 : 0.55;
+  const maintenanceCapex = totalCapex * maintenanceRatio;
+
+  // Owner Earnings: 영업현금흐름 - 유지보수 CAPEX (=주주 실질 현금흐름)
+  const ownerEarnings = operatingCF > 0
+    ? Math.max(operatingCF - maintenanceCapex, freeCashflow > 0 ? freeCashflow : 0)
+    : (freeCashflow > 0 ? freeCashflow : 0);
+
+  // 성장률: 이익성장률 vs 매출성장률*0.7 중 높은 값 사용 (단기 이익 변동성 완화)
+  const blendedGrowth = Math.max(earningsGrowth, revenueGrowth * 0.7);
+  const discountRate = 0.10;
+  const cappedGrowthRate = Math.max(0.03, Math.min(0.15, blendedGrowth));
+
+  // Net Cash (잉여 현금): (현금 - 부채) / 주식수 → 적정주가에 가산
+  const netCashPerShare = sharesOutstanding > 0
+    ? Math.max(0, totalCashBal - totalDebt) / sharesOutstanding
+    : 0;
+
+  const dcfBase = calcDCF(ownerEarnings > 0 ? ownerEarnings : freeCashflow,
+                           cappedGrowthRate, discountRate, 0.025, 10, sharesOutstanding);
+  const dcfIntrinsic = dcfBase
+    ? Math.round(dcfBase + netCashPerShare)
+    : Math.round(price * 1.2);
   return {
     ticker: ticker.toUpperCase(),
     name: ap.longName || ap.shortName || ticker,
@@ -579,6 +608,10 @@ const mapYFToStock = (ticker, data, chartData) => {
       totalRevenue,
       grossProfit,
       discountRate,
+      cappedGrowthRate,
+      ownerEarnings,
+      maintenanceRatio,
+      netCashPerShare,
       sharesOutstanding
     }
   };
@@ -677,13 +710,13 @@ const HelpTip = ({
   })));
 };
 const TIPS = {
-  mos: "MoS (Margin of Safety)\n= (DCF Intrinsic - Price) / DCF Intrinsic × 100\n\nDCF is self-calculated from:\n- Free Cash Flow\n- Growth rate = earnings growth (capped 2–12%)\n- Discount Rate = 10% (target return)\n- 10yr projection + terminal value (Gordon Growth)",
+  mos: "MoS (Margin of Safety)\n= (DCF Intrinsic - Price) / DCF Intrinsic × 100\n\nDCF = Owner Earnings × 10yr projection:\n- Owner Earnings = Operating CF - Maintenance CapEx\n- Maintenance CapEx: 15%(성장주) / 35%(중간) / 55%(성숙주)\n- Growth rate = max(EPS growth, Revenue growth×0.7) capped 3-15%\n- Discount Rate = 10% (목표 수익률)\n- + Net Cash (현금-부채) / 주식수",
   val: "Valuation Score (0-100)\n- EV/EBIT (20pts)\n- DCF MoS (18pts)\n- P/FCF (15pts)\n- Owner Earnings (15pts)\n- FCF Growth (12pts)\n- PEG (10pts)\n- Graham# (10pts)",
   qual: "Quality Score (0-100)\n- ROE (20pts)\n- ROIC (18pts)\n- D/E (15pts)\n- FCF Yield (15pts)\n- Gross Margin (15pts)\n- Moat (17pts)",
   quant: "Quant Score (0-100)\n- Williams %R (20pts)\n- A/D Line (15pts)\n- Momentum (15pts)\n- Sentiment (15pts)\n- COT (15pts)\n- 6m Price Mom (10pts)\n- Pattern (10pts)",
   composite: "Composite = Val×35% + Qual×25% + Quant×40%",
   signal: "Strong Buy (80+): 15-20%\nBuy (65-79): 10-15%\nNeutral (50-64): 5-10%\nWatch (35-49): 0-5%\nSell (<35 or 2+): exit",
-  fairValue: "Fair Value = Self-calculated DCF\nFCF × (1+g)^t / (1+r)^t summed 10yrs\n+ Terminal Value (Gordon Growth)\nDiscount Rate: 10% fixed (target return)\nGrowth Rate: earnings growth, capped 2–12%",
+  fairValue: "Fair Value = Owner Earnings DCF\n영업현금흐름 - 유지보수 CAPEX = 주주수익\n× 10년 할인 + 잔존가치 (Gordon Growth)\n+ 잉여현금(현금-부채)/주식수\nDiscount Rate: 10% / Growth: 3-15% cap",
   sell: "2+ simultaneous = auto-Sell.\nROE<12%, D/E>1.2, Margin<35%, ROIC<7%, FCF Yield<1%, %R overbought, Sentiment>75, Overvalued>10%, EV/EBIT>25x",
   evEbit: "EV/EBIT: Best single-factor backtest\n15.34% CAGR, Sharpe 0.79\nEV/EBIT < 10x = undervalued\n\nSelf-calculated from financial statements",
   pFcf: "P/FCF = MarketCap / FreeCashflow\n< 10 = undervalued\n10-20 = fair\n> 25 = overvalued",
@@ -3665,10 +3698,10 @@ function Dashboard() {
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       background: "linear-gradient(135deg,#1c1917 0%,#292524 100%)",
-      padding: "22px 32px",
+      padding: "18px 32px",
       display: "flex",
       justifyContent: "space-between",
-      alignItems: "center",
+      alignItems: "flex-start",
       borderBottom: "3px solid " + C.gold
     }
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h1", {
@@ -3797,9 +3830,9 @@ function Dashboard() {
     style: {
       padding: "6px 14px",
       borderRadius: 6,
-      border: "1px solid " + (editMode ? C.crimsonLight : C.blueFrost) + "88",
-      background: editMode ? C.crimsonLight + "22" : "transparent",
-      color: editMode ? C.crimsonLight : C.blueFrost,
+      border: "1px solid " + C.gold + (editMode ? "ff" : "88"),
+      background: editMode ? "linear-gradient(135deg," + C.gold + "," + C.goldBright + ")" : "transparent",
+      color: editMode ? "#fff" : C.gold,
       fontSize: 11,
       fontWeight: 700,
       cursor: "pointer",
@@ -4412,7 +4445,7 @@ function Dashboard() {
       lineHeight: 1.8,
       margin: 0
     }
-  }, "All financial data is fetched in real-time from market data providers.", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "ROE, ROIC, D/E, Gross Margin, FCF Yield, P/FCF, EV/EBIT, PEG"), ": pulled from financial statements", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "DCF Intrinsic Value"), ": self-calculated from FCF, earnings growth rate (capped 2\u201312%), discount rate 10%", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "Graham Number"), ": \u221A(22.5 \xD7 EPS \xD7 Book Value)", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "6-month Momentum"), ": calculated from price chart data")), /*#__PURE__*/React.createElement(Card, {
+  }, "All financial data is fetched in real-time from market data providers.", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "ROE, ROIC, D/E, Gross Margin, FCF Yield, P/FCF, EV/EBIT, PEG"), ": pulled from financial statements", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "DCF Intrinsic Value"), ": Owner Earnings (Operating CF - Maintenance CapEx), growth 3-15%, discount 10%", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "Graham Number"), ": \u221A(22.5 \xD7 EPS \xD7 Book Value)", /*#__PURE__*/React.createElement("br", null), "\u2022 ", /*#__PURE__*/React.createElement("b", null, "6-month Momentum"), ": calculated from price chart data")), /*#__PURE__*/React.createElement(Card, {
     style: {
       marginBottom: 18
     }

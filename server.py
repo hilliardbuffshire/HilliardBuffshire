@@ -105,24 +105,32 @@ def build_quotesummary(ticker_str):
     except Exception:
         total_rev = gross_profit = ebit = net_income = 0
 
-    # Cash flow
+    # Cash flow — extract operatingCF and capex separately for Owner Earnings
+    ocf = 0
+    capex = 0
     try:
         cf = t.cash_flow
         if cf is not None and not cf.empty:
-            fcf = row(cf, "Free Cash Flow")
+            ocf   = row(cf, "Operating Cash Flow", "Cash Flow From Operations",
+                            "Total Cash From Operating Activities")
+            capex = abs(row(cf, "Capital Expenditure", "Purchase Of PPE",
+                               "Capital Expenditures"))
+            fcf   = row(cf, "Free Cash Flow")
             if not fcf:
-                ocf   = row(cf, "Operating Cash Flow", "Cash Flow From Operations")
-                capex = abs(row(cf, "Capital Expenditure", "Purchase Of PPE"))
-                if ocf:
-                    fcf = ocf - capex
+                fcf = (ocf - capex) if ocf else 0
         else:
             fcf = 0
     except Exception:
         fcf = 0
     if not fcf:
         fcf = safe(info.get("freeCashflow"))
+    if not ocf:
+        ocf = safe(info.get("operatingCashflow") or info.get("totalCashFromOperatingActivities"))
+    if not capex:
+        capex = abs(safe(info.get("capitalExpenditures", 0)))
 
     # Balance sheet
+    total_cash = 0
     try:
         bs = t.balance_sheet
         if bs is not None and not bs.empty:
@@ -131,12 +139,17 @@ def build_quotesummary(ticker_str):
             total_equity    = row(bs, "Stockholders Equity", "Total Stockholder Equity",
                                       "Common Stock Equity") or 1
             total_assets    = row(bs, "Total Assets") or 1
+            total_cash      = row(bs, "Cash And Cash Equivalents",
+                                      "Cash And Short Term Investments",
+                                      "Cash Cash Equivalents And Short Term Investments")
         else:
             long_term_debt = short_term_debt = 0
             total_equity = total_assets = 1
     except Exception:
         long_term_debt = short_term_debt = 0
         total_equity = total_assets = 1
+    if not total_cash:
+        total_cash = safe(info.get("totalCash", 0))
 
     price      = safe(info.get("currentPrice") or info.get("regularMarketPrice"))
     market_cap = safe(info.get("marketCap"))
@@ -144,14 +157,18 @@ def build_quotesummary(ticker_str):
 
     result = {
         "financialData": {
-            "currentPrice":   v(price),
-            "freeCashflow":   v(fcf),
-            "totalRevenue":   v(total_rev or safe(info.get("totalRevenue"))),
-            "returnOnEquity": v(info.get("returnOnEquity")),
-            "returnOnAssets": v(info.get("returnOnAssets")),
-            "debtToEquity":   v(info.get("debtToEquity")),
-            "grossMargins":   v(info.get("grossMargins")),
-            "earningsGrowth": v(info.get("earningsGrowth") or info.get("revenueGrowth")),
+            "currentPrice":        v(price),
+            "freeCashflow":        v(fcf),
+            "operatingCashflow":   v(ocf),
+            "capitalExpenditures": v(capex),
+            "totalCash":           v(total_cash),
+            "totalRevenue":        v(total_rev or safe(info.get("totalRevenue"))),
+            "returnOnEquity":      v(info.get("returnOnEquity")),
+            "returnOnAssets":      v(info.get("returnOnAssets")),
+            "debtToEquity":        v(info.get("debtToEquity")),
+            "grossMargins":        v(info.get("grossMargins")),
+            "earningsGrowth":      v(info.get("earningsGrowth")),
+            "revenueGrowth":       v(info.get("revenueGrowth")),
         },
         "defaultKeyStatistics": {
             "sharesOutstanding": v(shares),

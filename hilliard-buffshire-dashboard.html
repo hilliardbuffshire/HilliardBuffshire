@@ -870,6 +870,307 @@ const scoreQuant = s => {
 const computeComposite = (val, qual, quant) => Math.round(val.total * 0.35 + qual.total * 0.25 + quant.total * 0.40);
 const calcFcfPerShare = s => s.fcfPerShare || parseFloat((s.price * s.fcfYield / 100).toFixed(2));
 
+// ── S&P 500 UNIVERSE (for market scan) ───────────────────────
+// [ticker, name, sector, capTier]  capTier: "Mega"(>$200B) | "Large"($10-200B) | "Mid"(<$10B)
+const UNIVERSE = [
+  ["AAPL","Apple Inc.","Technology","Mega"],["MSFT","Microsoft Corp.","Technology","Mega"],
+  ["NVDA","NVIDIA Corp.","Technology","Mega"],["GOOGL","Alphabet Inc.","Technology","Mega"],
+  ["AMZN","Amazon.com","Technology","Mega"],["META","Meta Platforms","Technology","Mega"],
+  ["AVGO","Broadcom Inc.","Technology","Mega"],["ORCL","Oracle Corp.","Technology","Large"],
+  ["CRM","Salesforce Inc.","Technology","Large"],["ADBE","Adobe Inc.","Technology","Large"],
+  ["CSCO","Cisco Systems","Technology","Large"],["INTC","Intel Corp.","Technology","Large"],
+  ["AMD","Advanced Micro Devices","Technology","Large"],["QCOM","Qualcomm Inc.","Technology","Large"],
+  ["TXN","Texas Instruments","Technology","Large"],["MU","Micron Technology","Technology","Large"],
+  ["AMAT","Applied Materials","Technology","Large"],["NOW","ServiceNow Inc.","Technology","Large"],
+  ["INTU","Intuit Inc.","Technology","Large"],["IBM","IBM Corp.","Technology","Large"],
+  ["PANW","Palo Alto Networks","Technology","Large"],["LRCX","Lam Research","Technology","Large"],
+  ["KLAC","KLA Corp.","Technology","Large"],["ADI","Analog Devices","Technology","Large"],
+  ["SNPS","Synopsys Inc.","Technology","Large"],["CDNS","Cadence Design","Technology","Large"],
+  ["TSLA","Tesla Inc.","Consumer Disc.","Mega"],["HD","Home Depot","Consumer Disc.","Mega"],
+  ["MCD","McDonald's Corp.","Consumer Disc.","Large"],["NKE","Nike Inc.","Consumer Disc.","Large"],
+  ["LOW","Lowe's Companies","Consumer Disc.","Large"],["TJX","TJX Companies","Consumer Disc.","Large"],
+  ["SBUX","Starbucks Corp.","Consumer Disc.","Large"],["BKNG","Booking Holdings","Consumer Disc.","Large"],
+  ["TGT","Target Corp.","Consumer Disc.","Large"],["CMG","Chipotle Mexican","Consumer Disc.","Large"],
+  ["ABNB","Airbnb Inc.","Consumer Disc.","Large"],["MAR","Marriott Intl","Consumer Disc.","Large"],
+  ["F","Ford Motor","Consumer Disc.","Large"],["GM","General Motors","Consumer Disc.","Large"],
+  ["DHI","D.R. Horton","Consumer Disc.","Large"],["LEN","Lennar Corp.","Consumer Disc.","Large"],
+  ["WMT","Walmart Inc.","Consumer Staples","Mega"],["PG","Procter & Gamble","Consumer Staples","Mega"],
+  ["KO","Coca-Cola Co.","Consumer Staples","Mega"],["PEP","PepsiCo Inc.","Consumer Staples","Mega"],
+  ["COST","Costco Wholesale","Consumer Staples","Mega"],["PM","Philip Morris","Consumer Staples","Large"],
+  ["MO","Altria Group","Consumer Staples","Large"],["MDLZ","Mondelez Intl","Consumer Staples","Large"],
+  ["CL","Colgate-Palmolive","Consumer Staples","Large"],["GIS","General Mills","Consumer Staples","Large"],
+  ["KHC","Kraft Heinz","Consumer Staples","Large"],["HSY","Hershey Co.","Consumer Staples","Large"],
+  ["KR","Kroger Co.","Consumer Staples","Large"],
+  ["UNH","UnitedHealth Group","Healthcare","Mega"],["LLY","Eli Lilly & Co.","Healthcare","Mega"],
+  ["JNJ","Johnson & Johnson","Healthcare","Mega"],["ABBV","AbbVie Inc.","Healthcare","Mega"],
+  ["MRK","Merck & Co.","Healthcare","Mega"],["TMO","Thermo Fisher","Healthcare","Large"],
+  ["ABT","Abbott Labs","Healthcare","Large"],["DHR","Danaher Corp.","Healthcare","Large"],
+  ["BMY","Bristol-Myers Squibb","Healthcare","Large"],["AMGN","Amgen Inc.","Healthcare","Large"],
+  ["GILD","Gilead Sciences","Healthcare","Large"],["CVS","CVS Health","Healthcare","Large"],
+  ["SYK","Stryker Corp.","Healthcare","Large"],["ISRG","Intuitive Surgical","Healthcare","Large"],
+  ["BSX","Boston Scientific","Healthcare","Large"],["HCA","HCA Healthcare","Healthcare","Large"],
+  ["CI","Cigna Group","Healthcare","Large"],["MDT","Medtronic","Healthcare","Large"],
+  ["VRTX","Vertex Pharma","Healthcare","Large"],["REGN","Regeneron Pharma","Healthcare","Large"],
+  ["BRK-B","Berkshire Hathaway","Financials","Mega"],["JPM","JPMorgan Chase","Financials","Mega"],
+  ["V","Visa Inc.","Financials","Mega"],["MA","Mastercard","Financials","Mega"],
+  ["BAC","Bank of America","Financials","Mega"],["WFC","Wells Fargo","Financials","Large"],
+  ["GS","Goldman Sachs","Financials","Large"],["MS","Morgan Stanley","Financials","Large"],
+  ["C","Citigroup","Financials","Large"],["AXP","American Express","Financials","Large"],
+  ["BLK","BlackRock Inc.","Financials","Large"],["SCHW","Charles Schwab","Financials","Large"],
+  ["PNC","PNC Financial","Financials","Large"],["COF","Capital One","Financials","Large"],
+  ["MCO","Moody's Corp.","Financials","Large"],["SPGI","S&P Global","Financials","Large"],
+  ["ICE","Intercontinental Exch","Financials","Large"],["CME","CME Group","Financials","Large"],
+  ["XOM","ExxonMobil Corp.","Energy","Mega"],["CVX","Chevron Corp.","Energy","Mega"],
+  ["COP","ConocoPhillips","Energy","Large"],["SLB","SLB (Schlumberger)","Energy","Large"],
+  ["EOG","EOG Resources","Energy","Large"],["PSX","Phillips 66","Energy","Large"],
+  ["VLO","Valero Energy","Energy","Large"],["MPC","Marathon Petroleum","Energy","Large"],
+  ["OXY","Occidental Petroleum","Energy","Large"],["HAL","Halliburton Co.","Energy","Large"],
+  ["CAT","Caterpillar Inc.","Industrials","Large"],["UPS","United Parcel Svc","Industrials","Large"],
+  ["HON","Honeywell Intl","Industrials","Large"],["RTX","RTX Corp.","Industrials","Large"],
+  ["LMT","Lockheed Martin","Industrials","Large"],["GE","GE Aerospace","Industrials","Large"],
+  ["BA","Boeing Co.","Industrials","Large"],["NOC","Northrop Grumman","Industrials","Large"],
+  ["EMR","Emerson Electric","Industrials","Large"],["ETN","Eaton Corp.","Industrials","Large"],
+  ["FDX","FedEx Corp.","Industrials","Large"],["DE","Deere & Company","Industrials","Large"],
+  ["CSX","CSX Corp.","Industrials","Large"],["UNP","Union Pacific","Industrials","Large"],
+  ["NSC","Norfolk Southern","Industrials","Large"],["WM","Waste Management","Industrials","Large"],
+  ["CTAS","Cintas Corp.","Industrials","Large"],["ITW","Illinois Tool Works","Industrials","Large"],
+  ["LIN","Linde PLC","Materials","Mega"],["APD","Air Products","Materials","Large"],
+  ["ECL","Ecolab Inc.","Materials","Large"],["NEM","Newmont Corp.","Materials","Large"],
+  ["FCX","Freeport-McMoRan","Materials","Large"],["ALB","Albemarle Corp.","Materials","Large"],
+  ["PLD","Prologis Inc.","Real Estate","Large"],["AMT","American Tower","Real Estate","Large"],
+  ["CCI","Crown Castle","Real Estate","Large"],["EQIX","Equinix Inc.","Real Estate","Large"],
+  ["SPG","Simon Property","Real Estate","Large"],["O","Realty Income","Real Estate","Large"],
+  ["WELL","Welltower Inc.","Real Estate","Large"],["DLR","Digital Realty","Real Estate","Large"],
+  ["PSA","Public Storage","Real Estate","Large"],
+  ["NEE","NextEra Energy","Utilities","Large"],["DUK","Duke Energy","Utilities","Large"],
+  ["SO","Southern Company","Utilities","Large"],["D","Dominion Energy","Utilities","Large"],
+  ["EXC","Exelon Corp.","Utilities","Large"],["SRE","Sempra Energy","Utilities","Large"],
+  ["XEL","Xcel Energy","Utilities","Large"],
+  ["NFLX","Netflix Inc.","Communication","Large"],["DIS","Walt Disney Co.","Communication","Large"],
+  ["CMCSA","Comcast Corp.","Communication","Large"],["VZ","Verizon Comms","Communication","Large"],
+  ["T","AT&T Inc.","Communication","Large"],["TMUS","T-Mobile US","Communication","Large"],
+  ["EA","Electronic Arts","Communication","Large"],["TTWO","Take-Two Interactive","Communication","Large"]
+];
+
+// ── UNIVERSE SCREENER COMPONENT ───────────────────────────────
+const UniverseScreener = ({ L }) => {
+  const [scanState, setScanState] = useState("idle");
+  const [scanResults, setScanResults] = useState([]);
+  const [scanProgress, setScanProgress] = useState(0);
+  const [sigFilt, setSigFilt] = useState("All");
+  const [capFilt, setCapFilt] = useState("All");
+  const [secFilt, setSecFilt] = useState("All");
+  const [mosFilt, setMosFilt] = useState("All");
+  const [peFilt, setPeFilt] = useState("All");
+  const [deFilt, setDeFilt] = useState("All");
+  const [uSort, setUSort] = useState("composite");
+  const [uSelected, setUSelected] = useState(null);
+  const cancelRef = useRef(false);
+
+  const startScan = async () => {
+    setScanState("scanning");
+    setScanResults([]);
+    setScanProgress(0);
+    cancelRef.current = false;
+    let results = [];
+    for (let i = 0; i < UNIVERSE.length; i += 5) {
+      if (cancelRef.current) break;
+      const batch = UNIVERSE.slice(i, i + 5);
+      const settled = await Promise.allSettled(
+        batch.map(async ([ticker, name, sector]) => {
+          try {
+            const [yfData, chartData] = await Promise.all([
+              fetchYF(ticker),
+              fetchYFChart(ticker, "6mo").catch(() => null)
+            ]);
+            const mapped = mapYFToStock(ticker, yfData, chartData);
+            if (!mapped.name) mapped.name = name;
+            if (!mapped.sector || mapped.sector === "Unknown") mapped.sector = sector;
+            const val = scoreMultiValuation(mapped);
+            const qual = scoreQuality(mapped);
+            const q = scoreQuant(mapped);
+            const composite = computeComposite(val, qual, q);
+            const sellSignals = detectSellSignals(mapped);
+            const tier = getTier(composite, sellSignals);
+            const mos = ((mapped.dcfIntrinsic - mapped.price) / mapped.dcfIntrinsic * 100).toFixed(1);
+            return { ...mapped, valScore: val, qualScore: qual, quantScore: q, composite, sellSignals, tier, mos, fcfPS: calcFcfPerShare(mapped) };
+          } catch(e) { return null; }
+        })
+      );
+      const valid = settled.filter(r => r.status === "fulfilled" && r.value).map(r => r.value);
+      results = [...results, ...valid];
+      setScanResults([...results]);
+      setScanProgress(Math.min(i + 5, UNIVERSE.length));
+      if (i + 5 < UNIVERSE.length && !cancelRef.current) await new Promise(r => setTimeout(r, 400));
+    }
+    setScanState("complete");
+  };
+
+  const stopScan = () => { cancelRef.current = true; };
+
+  const filtered = useMemo(() => {
+    let arr = scanResults;
+    if (sigFilt !== "All") arr = arr.filter(s => s.tier.tier === sigFilt);
+    if (capFilt !== "All") arr = arr.filter(s => {
+      const mc = s._meta?.marketCap || 0;
+      if (capFilt === "Mega") return mc >= 200e9;
+      if (capFilt === "Large") return mc >= 10e9 && mc < 200e9;
+      if (capFilt === "Mid") return mc > 0 && mc < 10e9;
+      return true;
+    });
+    if (secFilt !== "All") arr = arr.filter(s => s.sector === secFilt);
+    if (mosFilt !== "All") arr = arr.filter(s => {
+      const m = parseFloat(s.mos);
+      if (mosFilt === ">30") return m > 30;
+      if (mosFilt === ">20") return m > 20;
+      if (mosFilt === ">10") return m > 10;
+      if (mosFilt === ">0") return m > 0;
+      return true;
+    });
+    if (peFilt !== "All") arr = arr.filter(s => {
+      if (!s.pe || s.pe <= 0) return false;
+      if (peFilt === "<15") return s.pe < 15;
+      if (peFilt === "<20") return s.pe < 20;
+      if (peFilt === "<25") return s.pe < 25;
+      return true;
+    });
+    if (deFilt !== "All") arr = arr.filter(s => {
+      if (deFilt === "<0.5") return (s.debtToEquity || 0) < 0.5;
+      if (deFilt === "<1.0") return (s.debtToEquity || 0) < 1.0;
+      return true;
+    });
+    return [...arr].sort((a, b) => {
+      if (uSort === "mos") return parseFloat(b.mos) - parseFloat(a.mos);
+      if (uSort === "value") return b.valScore.total - a.valScore.total;
+      if (uSort === "quality") return b.qualScore.total - a.qualScore.total;
+      if (uSort === "pe") return (a.pe > 0 ? a.pe : 999) - (b.pe > 0 ? b.pe : 999);
+      return b.composite - a.composite;
+    });
+  }, [scanResults, sigFilt, capFilt, secFilt, mosFilt, peFilt, deFilt, uSort]);
+
+  const sectors = useMemo(() => {
+    const s = new Set(scanResults.map(r => r.sector).filter(Boolean));
+    return ["All", ...Array.from(s).sort()];
+  }, [scanResults]);
+
+  const counts = useMemo(() => {
+    const c = { total: scanResults.length, strongBuy: 0, buy: 0, neutral: 0, sell: 0 };
+    scanResults.forEach(s => {
+      if (s.tier.tier === "Strong Buy") c.strongBuy++;
+      else if (s.tier.tier === "Buy") c.buy++;
+      else if (s.tier.tier === "Neutral") c.neutral++;
+      else c.sell++;
+    });
+    return c;
+  }, [scanResults]);
+
+  const pct = UNIVERSE.length > 0 ? Math.round(scanProgress / UNIVERSE.length * 100) : 0;
+  const CE = React.createElement;
+
+  const FSel = (label, val, setter, opts) => CE("div", { key: label, style: { display: "flex", gap: 4, alignItems: "center" } },
+    CE("span", { style: { fontSize: 10, color: C.textDim, textTransform: "uppercase", whiteSpace: "nowrap" } }, label + ":"),
+    CE("select", { value: val, onChange: e => setter(e.target.value), style: { padding: "4px 6px", borderRadius: 6, border: "1px solid " + C.border, background: C.card, fontSize: 11, cursor: "pointer" } },
+      opts.map(o => CE("option", { key: o, value: o }, o)))
+  );
+
+  return CE(React.Fragment, null,
+    CE(Card, { style: { marginBottom: 16, padding: 16 } },
+      CE("div", { style: { display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" } },
+        CE("div", { style: { flex: 1, minWidth: 200 } },
+          CE("div", { style: { fontWeight: 700, fontSize: 14, color: C.navy, marginBottom: 3 } },
+            L ? "전체 미국 시장 스캔 (Universe Scanner)" : "Full US Market Scanner (Universe)"),
+          CE("div", { style: { fontSize: 11, color: C.textDim } },
+            L ? `S&P 500 주요 종목 ${UNIVERSE.length}개 — 5개씩 배치로 실시간 스캔` : `${UNIVERSE.length} major S&P 500 stocks — real-time batch scan (5 at a time)`)
+        ),
+        scanState !== "scanning" ?
+          CE("button", { onClick: startScan, style: { padding: "8px 22px", borderRadius: 8, border: "none", background: "linear-gradient(135deg," + C.gold + "," + C.goldBright + ")", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", letterSpacing: 0.5 } },
+            scanResults.length > 0 ? (L ? "🔄 재스캔" : "🔄 Re-Scan") : (L ? "▶ 스캔 시작" : "▶ Start Scan")) :
+          CE("button", { onClick: stopScan, style: { padding: "8px 22px", borderRadius: 8, border: "none", background: C.crimson, color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" } },
+            L ? "■ 중지" : "■ Stop"),
+        scanState === "scanning" && CE("div", { style: { minWidth: 170 } },
+          CE("div", { style: { fontSize: 11, color: C.textDim, marginBottom: 4 } }, `${scanProgress} / ${UNIVERSE.length}  (${pct}%)`),
+          CE("div", { style: { height: 7, background: C.border, borderRadius: 4, overflow: "hidden" } },
+            CE("div", { style: { height: "100%", width: pct + "%", background: "linear-gradient(90deg," + C.gold + "," + C.goldBright + ")", transition: "width 0.5s ease", borderRadius: 4 } })
+          )
+        ),
+        scanState === "complete" && CE("span", { style: { fontSize: 12, color: C.emerald, fontWeight: 700 } },
+          `✓ ${L ? "완료" : "Complete"} — ${counts.total} ${L ? "종목 스캔됨" : "stocks scanned"}`)
+      )
+    ),
+    scanResults.length > 0 && CE("div", { style: { display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 10, marginBottom: 16 } },
+      ...[
+        [L ? "전체" : "Total", counts.total, C.navy],
+        [L ? "강력매수" : "Strong Buy", counts.strongBuy, C.emerald],
+        [L ? "매수" : "Buy", counts.buy, C.emeraldLight],
+        [L ? "중립" : "Neutral", counts.neutral, C.orange],
+        [L ? "매도/주의" : "Sell/Watch", counts.sell, C.crimson]
+      ].map(([lbl, v, col]) => CE(Card, { key: lbl, style: { padding: 12, textAlign: "center" } },
+        CE("div", { style: { fontSize: 24, fontWeight: 800, color: col, lineHeight: 1 } }, v),
+        CE("div", { style: { fontSize: 10, color: C.textDim, marginTop: 4 } }, lbl)
+      ))
+    ),
+    scanResults.length > 0 && CE(Card, { style: { marginBottom: 14, padding: 12 } },
+      CE("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" } },
+        FSel(L ? "신호" : "Signal", sigFilt, setSigFilt, ["All", "Strong Buy", "Buy", "Neutral", "Watch", "Sell"]),
+        FSel(L ? "시가총액" : "Mkt Cap", capFilt, setCapFilt, ["All", "Mega", "Large", "Mid"]),
+        FSel(L ? "섹터" : "Sector", secFilt, setSecFilt, sectors),
+        FSel(L ? "안전마진" : "MoS", mosFilt, setMosFilt, ["All", ">30", ">20", ">10", ">0"]),
+        FSel("P/E", peFilt, setPeFilt, ["All", "<15", "<20", "<25"]),
+        FSel("D/E", deFilt, setDeFilt, ["All", "<0.5", "<1.0"]),
+        FSel(L ? "정렬" : "Sort", uSort, setUSort, ["composite", "mos", "value", "quality", "pe"]),
+        CE("span", { style: { marginLeft: "auto", fontSize: 11, color: C.textDim, fontWeight: 600 } },
+          filtered.length + (L ? " 결과" : " results"))
+      )
+    ),
+    scanResults.length > 0 && CE(Card, { style: { padding: 0, overflow: "auto", maxHeight: 580 } },
+      CE("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12 } },
+        CE("thead", null,
+          CE("tr", { style: { borderBottom: "2px solid " + C.border, background: C.goldBg, position: "sticky", top: 0, zIndex: 2 } },
+            ...["#", "Ticker", L ? "섹터" : "Sector", L ? "시가총액" : "Mkt Cap", L ? "현재가" : "Price",
+              L ? "적정가(DCF)" : "Fair Val", L ? "안전마진" : "MoS%", "P/E", "D/E",
+              L ? "종합점수" : "Score", L ? "신호" : "Signal"
+            ].map((h, idx) => CE("td", { key: idx, style: { padding: "9px 8px", fontWeight: 700, fontSize: 10, color: C.textMid, textTransform: "uppercase", whiteSpace: "nowrap", letterSpacing: 0.5 } }, h))
+          )
+        ),
+        CE("tbody", null,
+          filtered.length === 0 ?
+            CE("tr", null, CE("td", { colSpan: 11, style: { padding: 32, textAlign: "center", color: C.textDim, fontSize: 13 } },
+              scanState === "idle" ? (L ? "▶ 스캔 시작 버튼을 눌러주세요." : "▶ Press Start Scan to begin scanning.") :
+              (L ? "현재 필터 조건에 맞는 종목이 없습니다." : "No stocks match the current filters."))) :
+            filtered.map((s, i) => {
+              const mc = s._meta?.marketCap || 0;
+              const mcStr = mc >= 1e12 ? "$" + (mc / 1e12).toFixed(1) + "T" : mc >= 1e9 ? "$" + (mc / 1e9).toFixed(0) + "B" : mc > 0 ? "$" + (mc / 1e6).toFixed(0) + "M" : "—";
+              const mosNum = parseFloat(s.mos);
+              const mosColor = mosNum >= 20 ? C.emerald : mosNum >= 0 ? C.orange : C.crimson;
+              return CE("tr", {
+                key: s.ticker,
+                onClick: () => setUSelected(s),
+                style: { borderBottom: "1px solid " + C.borderLight, cursor: "pointer" },
+                onMouseEnter: e => e.currentTarget.style.background = C.cardHover,
+                onMouseLeave: e => e.currentTarget.style.background = "transparent"
+              },
+                CE("td", { style: { padding: "9px 8px", color: C.textDim, fontSize: 11 } }, i + 1),
+                CE("td", { style: { padding: "9px 8px", fontWeight: 700, color: C.navy } }, s.ticker),
+                CE("td", { style: { padding: "9px 8px", fontSize: 11, color: C.textMuted } }, s.sector || "—"),
+                CE("td", { style: { padding: "9px 8px", fontSize: 11, color: C.textDim } }, mcStr),
+                CE("td", { style: { padding: "9px 8px", fontWeight: 600 } }, s.price > 0 ? "$" + s.price.toFixed(2) : "—"),
+                CE("td", { style: { padding: "9px 8px", color: C.gold, fontWeight: 600 } }, s.dcfIntrinsic > 0 ? "$" + s.dcfIntrinsic : "—"),
+                CE("td", { style: { padding: "9px 8px", color: mosColor, fontWeight: 700 } }, isFinite(mosNum) ? mosNum.toFixed(1) + "%" : "—"),
+                CE("td", { style: { padding: "9px 8px", color: C.textMid } }, s.pe > 0 ? s.pe.toFixed(1) + "x" : "—"),
+                CE("td", { style: { padding: "9px 8px", color: (s.debtToEquity || 0) > 1 ? C.crimson : C.textMid } }, typeof s.debtToEquity === "number" ? s.debtToEquity.toFixed(2) : "—"),
+                CE("td", { style: { padding: "9px 8px", fontWeight: 800, color: s.tier.color, fontSize: 14 } }, s.composite),
+                CE("td", { style: { padding: "9px 8px" } },
+                  CE("span", { style: { padding: "3px 9px", borderRadius: 5, background: s.tier.color + "20", color: s.tier.color, fontSize: 10, fontWeight: 700, whiteSpace: "nowrap" } },
+                    s.tier.tier))
+              );
+            })
+        )
+      )
+    ),
+    uSelected && CE(StockDetail, { stock: uSelected, onClose: () => setUSelected(null) })
+  );
+};
+
 // ── DEFAULT STOCKS (Mar 2026 prices) ─────────────────────────
 const DEFAULT_STOCKS = [{
   ticker: "BRK-B",
@@ -1398,15 +1699,16 @@ const TabBtn = ({
 }) => /*#__PURE__*/React.createElement("button", {
   onClick: onClick,
   style: {
-    padding: "8px 18px",
+    padding: "7px 14px",
     borderRadius: 8,
     border: active ? "none" : "1px solid " + C.border,
     background: active ? "linear-gradient(135deg," + C.gold + "," + C.goldBright + ")" : C.card,
     color: active ? "#fff" : C.textMuted,
     fontWeight: 600,
-    fontSize: 12,
+    fontSize: 11,
     cursor: "pointer",
-    boxShadow: active ? "0 2px 12px " + C.gold + "33" : "none"
+    boxShadow: active ? "0 2px 12px " + C.gold + "33" : "none",
+    whiteSpace: "nowrap"
   }
 }, children);
 const ttStyle = {
@@ -3562,6 +3864,7 @@ function Dashboard() {
   const [lastRefresh, setLastRefresh] = useState(null);
   const [apiMsg, setApiMsg] = useState("");
   const [editMode, setEditMode] = useState(false);
+  const [screenerMode, setScreenerMode] = useState("watchlist");
   // Persist watchlist: localStorage (always) + Firestore (when logged in)
   useEffect(() => {
     try { localStorage.setItem("hb-watchlist", JSON.stringify(stocks)); } catch(e) {}
@@ -3772,18 +4075,19 @@ function Dashboard() {
       display: "flex",
       flexDirection: "column",
       alignItems: "flex-end",
-      gap: 8
+      gap: 6
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
-      gap: 4,
+      gap: 3,
       background: "#1c191788",
       borderRadius: 10,
-      padding: 4,
-      border: "1px solid " + C.gold + "33"
+      padding: 3,
+      border: "1px solid " + C.gold + "33",
+      flexWrap: "nowrap"
     }
-  }, [["market", "Market"], ["screener", "Screener"], ["valuation", "Valuation"], ["portfolio", "Portfolio"], ["accounts", "Accounts"], ["methodology", "Guide"]].map(([k, l]) => /*#__PURE__*/React.createElement(TabBtn, {
+  }, [["market", "Market"], ["screener", "Screener"], ["valuation", "Valuation"], ["portfolio", "Portfolio"], ["accounts", "Accounts"]].map(([k, l]) => /*#__PURE__*/React.createElement(TabBtn, {
     key: k,
     active: tab === k,
     onClick: () => setTab(k)
@@ -3791,7 +4095,8 @@ function Dashboard() {
     style: {
       display: "flex",
       alignItems: "center",
-      gap: 8
+      gap: 5,
+      flexWrap: "nowrap"
     }
   }, lastRefresh && /*#__PURE__*/React.createElement("span", {
     style: {
@@ -3801,7 +4106,7 @@ function Dashboard() {
   }, "Updated: ", lastRefresh), /*#__PURE__*/React.createElement("button", {
     onClick: () => setLang(L ? "EN" : "KR"),
     style: {
-      padding: "6px 12px",
+      padding: "5px 10px",
       borderRadius: 6,
       border: "1px solid " + C.gold + "88",
       background: L ? "linear-gradient(135deg," + C.gold + "," + C.goldBright + ")" : "transparent",
@@ -3815,7 +4120,7 @@ function Dashboard() {
     onClick: refreshAllStocks,
     disabled: refreshing,
     style: {
-      padding: "6px 16px",
+      padding: "5px 12px",
       borderRadius: 6,
       border: "none",
       background: "linear-gradient(135deg," + C.gold + "," + C.goldBright + ")",
@@ -3828,7 +4133,7 @@ function Dashboard() {
   }, refreshing ? "Refreshing..." : "Refresh Data"), /*#__PURE__*/React.createElement("button", {
     onClick: () => setEditMode(m => !m),
     style: {
-      padding: "6px 14px",
+      padding: "5px 11px",
       borderRadius: 6,
       border: "1px solid " + C.gold + (editMode ? "ff" : "88"),
       background: editMode ? "linear-gradient(135deg," + C.gold + "," + C.goldBright + ")" : "transparent",
@@ -3858,7 +4163,7 @@ function Dashboard() {
   }, !fbUser ? /*#__PURE__*/React.createElement("button", {
     onClick: signInGoogle,
     style: {
-      padding: "6px 14px",
+      padding: "5px 10px",
       borderRadius: 6,
       border: "1px solid #4285F488",
       background: "linear-gradient(135deg,#4285F4,#34A853)",
@@ -3922,7 +4227,14 @@ function Dashboard() {
     onSelect: s => setSelected(s),
     stocks: stocks,
     onAddStock: addStockToList
-  }), tab === "market" && /*#__PURE__*/React.createElement(MarketOverview, null), tab === "screener" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }), tab === "market" && /*#__PURE__*/React.createElement(MarketOverview, null), tab === "screener" && React.createElement(React.Fragment, null,
+  React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 18, alignItems: "center", flexWrap: "wrap" } },
+    React.createElement("button", { onClick: () => setScreenerMode("watchlist"), style: { padding: "7px 18px", borderRadius: 8, border: "1px solid " + (screenerMode === "watchlist" ? C.gold : C.gold + "66"), background: screenerMode === "watchlist" ? "linear-gradient(135deg," + C.gold + "," + C.goldBright + ")" : "transparent", color: screenerMode === "watchlist" ? "#fff" : C.gold, fontSize: 12, fontWeight: 700, cursor: "pointer" } }, L ? "📋 내 워치리스트" : "📋 My Watchlist"),
+    React.createElement("button", { onClick: () => setScreenerMode("universe"), style: { padding: "7px 18px", borderRadius: 8, border: "1px solid " + (screenerMode === "universe" ? C.navy : C.navy + "55"), background: screenerMode === "universe" ? "linear-gradient(135deg," + C.navy + "," + C.slate + ")" : "transparent", color: screenerMode === "universe" ? "#fff" : C.navy, fontSize: 12, fontWeight: 700, cursor: "pointer" } }, L ? "🌐 전체 시장 스캔" : "🌐 Market Universe"),
+    React.createElement("span", { style: { fontSize: 11, color: C.textDim, marginLeft: 4 } }, screenerMode === "watchlist" ? (L ? "워치리스트 종목만 필터링" : "Filter your watchlist stocks") : (L ? "S&P 500 전체 종목 실시간 스캔 (Graham 기준 포함)" : "Scan the full S&P 500 live — with Graham criteria filters"))
+  ),
+  screenerMode === "universe" && React.createElement(UniverseScreener, { L }),
+  screenerMode === "watchlist" && /*#__PURE__*/React.createElement("div", {
     style: {
       display: "grid",
       gridTemplateColumns: "repeat(6,1fr)",
@@ -3976,7 +4288,7 @@ function Dashboard() {
     label: L ? "평균안전마진" : "Avg MoS",
     value: (() => { const valid = enriched.map(b => parseFloat(b.mos)).filter(n => isFinite(n)); return valid.length ? (valid.reduce((a, n) => a + n, 0) / valid.length).toFixed(1) + "%" : "N/A"; })(),
     color: C.emerald
-  }))), /*#__PURE__*/React.createElement(Card, {
+  }))), screenerMode === "watchlist" && /*#__PURE__*/React.createElement(Card, {
     style: {
       marginBottom: 18,
       padding: 12
@@ -4046,7 +4358,7 @@ function Dashboard() {
     value: "mos"
   }, "MoS %"), /*#__PURE__*/React.createElement("option", {
     value: "pe"
-  }, "P/E"))))), /*#__PURE__*/React.createElement(Card, {
+  }, "P/E"))))), screenerMode === "watchlist" && /*#__PURE__*/React.createElement(Card, {
     style: {
       padding: 0,
       overflow: "visible"

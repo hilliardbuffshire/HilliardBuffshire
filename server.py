@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
-Hilliard Buffshire Investment Dashboard - Combined Server
-Serves static files AND Yahoo Finance data from a single port (8000).
-Run with: python server.py
+Hilliard Buffshire Investment Dashboard - Data Server
+Data sources:
+  • QuickFS (https://quickfs.net) — 10년치 재무제표 (revenue, FCF, capex 등)
+  • yfinance                      — 실시간 가격·시장 데이터 (무료·무제한)
+Run: python server.py
+QuickFS free tier: 500 calls/month  →  캐시(7일)로 충분히 커버
 """
 
 import http.server
@@ -12,16 +15,27 @@ import sys
 import subprocess
 import math
 import os
+import threading
+import time
+import datetime
+import concurrent.futures
 
-# Render/Railway/cloud platforms inject PORT via environment variable
 PORT = int(os.environ.get("PORT", 8000))
 
-# ── Auto-install yfinance ─────────────────────────────────────────
-def install_yfinance():
-    print("  Installing yfinance (one-time, ~30 sec)...")
+# ── QuickFS API Key ────────────────────────────────────────────────
+# 무료 키 발급: https://quickfs.net  → 회원가입 → API Keys
+# 여기 직접 입력하거나, 환경변수 QFS_API_KEY 로 설정하거나,
+# 대시보드 ⚙️ 설정에서 입력해도 됩니다 (localStorage 저장).
+QFS_API_KEY = os.environ.get("QFS_API_KEY", "")   # ← 키를 여기에 붙여넣기
+QFS_BASE    = "https://public-api.quickfs.net/v1"
+
+
+# ── Auto-install dependencies ──────────────────────────────────────
+def _install(pkg):
+    print(f"  Installing {pkg} (one-time)...")
     for cmd in [
-        [sys.executable, "-m", "pip", "install", "yfinance", "--quiet"],
-        [sys.executable, "-m", "pip", "install", "yfinance", "--quiet", "--user"],
+        [sys.executable, "-m", "pip", "install", pkg, "--quiet"],
+        [sys.executable, "-m", "pip", "install", pkg, "--quiet", "--user"],
     ]:
         try:
             subprocess.check_call(cmd)
@@ -34,19 +48,119 @@ try:
     import yfinance as yf
     print("  yfinance OK")
 except ImportError:
-    if install_yfinance():
+    if _install("yfinance"):
         import yfinance as yf
         print("  yfinance installed OK")
     else:
-        print("  ERROR: could not install yfinance. Run: pip install yfinance")
+        print("  ERROR: pip install yfinance 를 먼저 실행하세요")
+        sys.exit(1)
+
+try:
+    import requests as req
+    print("  requests OK")
+except ImportError:
+    if _install("requests"):
+        import requests as req
+        print("  requests installed OK")
+    else:
+        print("  ERROR: pip install requests 를 먼저 실행하세요")
         sys.exit(1)
 
 
-# ── Helpers ───────────────────────────────────────────────────────
-def v(val):
-    if val is None or (isinstance(val, float) and math.isnan(val)):
-        return {}
-    return {"raw": val, "fmt": str(val)}
+# ── In-memory cache (서버 실행 중 유지) ───────────────────────────
+_cache      = {}
+_cache_lock = threading.Lock()
+PRICE_TTL   = 5 * 60             # 5분   — 실시간 가격 (정확도 향상)
+FUND_TTL    = 7 * 24 * 3600      # 7일   — 재무제표 (API 절약)
+
+def _cget(key):
+    with _cache_lock:
+        if key in _cache:
+            ts, ttl, data = _cache[key]
+            if time.time() - ts < ttl:
+                return data
+    return None
+
+def _cset(key, data, ttl=FUND_TTL):
+    with _cache_lock:
+        _cache[key] = (time.time(), ttl, data)
+
+
+# ── QuickFS helpers ────────────────────────────────────────────────
+# 공식 메트릭 목록: https://public-api.quickfs.net/v1/api_docs.yaml
+QFS_METRICS = {
+    # Income Statement
+    "revenue":          "Total Revenue",
+    "gross_profit":     "Gross Profit",
+    "operating_income": "Operating Income (EBIT)",
+    "net_income":       "Net Income",
+    "eps_diluted":      "Diluted EPS",
+    # Cash Flow
+    "operating_cash_flow": "Operating Cash Flow",
+    "free_cash_flow":      "Free Cash Flow",
+    "capex":               "Capital Expenditures",
+    # Balance Sheet
+    "total_assets":         "Total Assets",
+    "total_equity":         "Total Equity",
+    "long_term_debt":       "Long-term Debt",
+    "total_debt":           "Total Debt",
+    "cash_and_equivalents": "Cash & Equivalents",
+    "shares_diluted":       "Diluted Shares",
+    "book_value_per_share": "Book Value/Share",
+    # Ratios
+    "roe":         "Return on Equity",
+    "roic":        "Return on Invested Capital",
+    "gross_margin":"Gross Margin",
+    "pe":          "P/E Ratio",
+}
+
+def qfs_fetch(company, metric, period="TTM", range_=1, api_key=None):
+    """QuickFS 단일 메트릭 조회. 반환: [oldest, ..., newest] 리스트."""
+    key = api_key or QFS_API_KEY
+    if not key:
+        return []
+    ck = f"qfs:{company}:{metric}:{period}:{range_}"
+    cached = _cget(ck)
+    if cached is not None:
+        return cached
+    try:
+        url    = f"{QFS_BASE}/data/{company}/{metric}"
+        params = {"period": period, "range": range_}
+        hdr    = {"X-QFS-API-Key": key}
+        r      = req.get(url, headers=hdr, params=params, timeout=12)
+        if r.status_code == 401:
+            print(f"  QuickFS: API 키 오류 ({metric})")
+            return []
+        if r.status_code == 404:
+            print(f"  QuickFS: 메트릭 없음 — {metric} ({company})")
+            return []
+        if r.status_code == 429:
+            print(f"  QuickFS: 월간 한도 초과 (500 calls/month)")
+            return []
+        r.raise_for_status()
+        vals = r.json().get("data", [])
+        ttl  = FUND_TTL if period == "Annual" else PRICE_TTL
+        _cset(ck, vals, ttl)
+        return vals
+    except Exception as e:
+        print(f"  QuickFS 오류 ({metric}): {e}")
+        return []
+
+def qfs_last(company, metric, period="TTM", api_key=None):
+    """가장 최근 값 반환 (TTM 기본)."""
+    vals = qfs_fetch(company, metric, period, 1, api_key)
+    if vals:
+        v = vals[-1]
+        return float(v) if v is not None else 0.0
+    return 0.0
+
+def qfs_series(company, metric, period="Annual", years=5, api_key=None):
+    """연도별 시계열 반환 (oldest→newest, 부족하면 끝에 0 패딩)."""
+    vals   = qfs_fetch(company, metric, period, years, api_key)
+    result = [float(v) if v is not None else 0.0 for v in vals]
+    while len(result) < years:
+        result.append(0.0)
+    return result[:years]
 
 def safe(x):
     if x is None:
@@ -57,170 +171,388 @@ def safe(x):
     except Exception:
         return 0
 
-def row(df, *keys):
-    for k in keys:
-        if k in df.index:
+def v(val):
+    """yfinance quoteSummary 형식 래핑 (front-end 호환)."""
+    if val is None or (isinstance(val, float) and math.isnan(val)):
+        return {}
+    return {"raw": val, "fmt": str(val)}
+
+
+# ── Main data builders ─────────────────────────────────────────────
+def build_quotesummary(ticker_str, qfs_key=None):
+    """
+    주식 스냅샷:
+      - 실시간 가격/시장데이터  → yfinance  (무료, 무제한)
+      - 재무제표 펀더멘털       → QuickFS   (캐시 7일)
+    front-end mapYFToStock 과 동일 포맷 반환.
+    """
+    company = f"US:{ticker_str}"
+
+    # ── 1. yfinance: 실시간 가격·시장 데이터 ──────────────────────
+    yf_ck = f"yf:info:{ticker_str}"
+    info  = _cget(yf_ck)
+    if info is None:
+        try:
+            info = yf.Ticker(ticker_str).info or {}
+        except Exception:
+            info = {}
+        _cset(yf_ck, info, PRICE_TTL)
+
+    # fast_info.last_price — 가장 정확하고 빠른 현재가 (지연 없음)
+    price_ck = f"yf:price:{ticker_str}"
+    price    = _cget(price_ck)
+    if price is None:
+        price = 0.0
+        # ① fast_info 시도 (가장 신뢰성 높음)
+        try:
+            fi = yf.Ticker(ticker_str).fast_info
+            price = float(getattr(fi, "last_price", None) or
+                          getattr(fi, "lastPrice", None) or 0.0)
+        except Exception:
+            pass
+        # ② history 폴백
+        if not price:
             try:
-                loc = df.index.get_loc(k)
-                if isinstance(loc, slice):
-                    val = df.iloc[loc.start, 0]
-                elif hasattr(loc, '__len__'):
-                    val = df.iloc[0, 0]
-                else:
-                    val = df.iloc[loc, 0]
-                r = safe(val)
-                if r != 0:
-                    return r
+                hist  = yf.Ticker(ticker_str).history(period="5d")
+                price = float(hist["Close"].dropna().iloc[-1]) if not hist.empty else 0.0
             except Exception:
-                continue
-    # partial match fallback
-    lower_keys = [k.lower() for k in keys]
-    for idx_name in df.index:
-        for lk in lower_keys:
-            if lk in str(idx_name).lower():
-                try:
-                    r = safe(df.loc[idx_name].iloc[0])
-                    if r != 0:
-                        return r
-                except Exception:
-                    pass
-    return 0
-
-
-# ── Yahoo Finance data fetchers ───────────────────────────────────
-def build_quotesummary(ticker_str):
-    t = yf.Ticker(ticker_str)
-    info = t.info or {}
-
-    # Income statement
-    try:
-        inc = t.income_stmt
-        if inc is not None and not inc.empty:
-            total_rev    = row(inc, "Total Revenue")
-            gross_profit = row(inc, "Gross Profit")
-            ebit         = row(inc, "EBIT", "Operating Income")
-            net_income   = row(inc, "Net Income")
-        else:
-            total_rev = gross_profit = ebit = net_income = 0
-    except Exception:
-        total_rev = gross_profit = ebit = net_income = 0
-
-    # Cash flow — extract operatingCF and capex separately for Owner Earnings
-    ocf = 0
-    capex = 0
-    try:
-        cf = t.cash_flow
-        if cf is not None and not cf.empty:
-            ocf   = row(cf, "Operating Cash Flow", "Cash Flow From Operations",
-                            "Total Cash From Operating Activities")
-            capex = abs(row(cf, "Capital Expenditure", "Purchase Of PPE",
-                               "Capital Expenditures"))
-            fcf   = row(cf, "Free Cash Flow")
-            if not fcf:
-                fcf = (ocf - capex) if ocf else 0
-        else:
-            fcf = 0
-    except Exception:
-        fcf = 0
-    if not fcf:
-        fcf = safe(info.get("freeCashflow"))
-    if not ocf:
-        ocf = safe(info.get("operatingCashflow") or info.get("totalCashFromOperatingActivities"))
-    if not capex:
-        capex = abs(safe(info.get("capitalExpenditures", 0)))
-
-    # Balance sheet
-    total_cash = 0
-    try:
-        bs = t.balance_sheet
-        if bs is not None and not bs.empty:
-            long_term_debt  = row(bs, "Long Term Debt", "Long-Term Debt")
-            short_term_debt = row(bs, "Current Debt", "Short Long Term Debt", "Short-Term Debt")
-            total_equity    = row(bs, "Stockholders Equity", "Total Stockholder Equity",
-                                      "Common Stock Equity") or 1
-            total_assets    = row(bs, "Total Assets") or 1
-            total_cash      = row(bs, "Cash And Cash Equivalents",
-                                      "Cash And Short Term Investments",
-                                      "Cash Cash Equivalents And Short Term Investments")
-        else:
-            long_term_debt = short_term_debt = 0
-            total_equity = total_assets = 1
-    except Exception:
-        long_term_debt = short_term_debt = 0
-        total_equity = total_assets = 1
-    if not total_cash:
-        total_cash = safe(info.get("totalCash", 0))
-
-    price      = safe(info.get("currentPrice") or info.get("regularMarketPrice"))
+                pass
+        # ③ info 폴백
+        if not price:
+            price = safe(info.get("regularMarketPrice") or info.get("currentPrice"))
+        if price:
+            _cset(price_ck, price, PRICE_TTL)
+    price = price or safe(info.get("regularMarketPrice") or info.get("currentPrice"))
     market_cap = safe(info.get("marketCap"))
-    shares     = safe(info.get("sharesOutstanding")) or 1
+    shares_yf  = safe(info.get("sharesOutstanding")) or 1
+    pe_yf      = safe(info.get("trailingPE") or info.get("forwardPE"))
+    beta       = safe(info.get("beta") or 1)
+    name       = info.get("longName") or info.get("shortName") or ticker_str
+    sector     = info.get("sector") or "Unknown"
+    industry   = info.get("industry") or ""
 
+    # ── 2. QuickFS: 재무제표 펀더멘털 (7일 캐시) ──────────────────
+    qfs_ck     = f"qfs:bundle:{ticker_str}"
+    fund       = _cget(qfs_ck)
+
+    if fund is None and (qfs_key or QFS_API_KEY):
+        METRICS = [
+            ("revenue",           "TTM"),
+            ("gross_profit",      "TTM"),
+            ("operating_income",  "TTM"),
+            ("net_income",        "TTM"),
+            ("eps_diluted",       "TTM"),
+            ("operating_cash_flow","TTM"),
+            ("free_cash_flow",    "TTM"),
+            ("capex",             "TTM"),
+            ("total_debt",        "Annual"),
+            ("total_equity",      "Annual"),
+            ("long_term_debt",    "Annual"),
+            ("cash_and_equivalents","Annual"),
+            ("shares_diluted",    "Annual"),
+            ("book_value_per_share","Annual"),
+            ("roe",               "TTM"),
+            ("roic",              "TTM"),
+            ("gross_margin",      "TTM"),
+        ]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
+            futs = {ex.submit(qfs_last, company, m, p, qfs_key): (m, p)
+                    for m, p in METRICS}
+            fund = {}
+            for fut, (metric, _) in futs.items():
+                try:
+                    fund[metric] = fut.result()
+                except Exception:
+                    fund[metric] = 0.0
+        _cset(qfs_ck, fund, FUND_TTL)
+
+    # QuickFS 없으면 yfinance 데이터로 폴백
+    if not fund:
+        fund = {}
+        try:
+            t = yf.Ticker(ticker_str)
+            cf = t.cash_flow
+            bs = t.balance_sheet
+            inc = t.income_stmt
+
+            def row(df, *keys):
+                if df is None or df.empty:
+                    return 0
+                for k in keys:
+                    if k in df.index:
+                        try:
+                            return safe(df.loc[k].iloc[0])
+                        except Exception:
+                            pass
+                    for idx in df.index:
+                        if k.lower() in str(idx).lower():
+                            try:
+                                r = safe(df.loc[idx].iloc[0])
+                                if r: return r
+                            except Exception:
+                                pass
+                return 0
+
+            ocf   = row(cf,  "Operating Cash Flow", "Total Cash From Operating Activities")
+            capex = abs(row(cf, "Capital Expenditure", "Purchase Of PPE"))
+            fcf   = row(cf,  "Free Cash Flow") or (ocf - capex)
+            fund = {
+                "revenue":            safe(info.get("totalRevenue")) or row(inc, "Total Revenue"),
+                "gross_profit":       row(inc, "Gross Profit"),
+                "operating_income":   row(inc, "EBIT", "Operating Income"),
+                "net_income":         row(inc, "Net Income"),
+                "eps_diluted":        safe(info.get("trailingEps")),
+                "operating_cash_flow":ocf or safe(info.get("operatingCashflow")),
+                "free_cash_flow":     fcf or safe(info.get("freeCashflow")),
+                "capex":              capex or abs(safe(info.get("capitalExpenditures", 0))),
+                "total_debt":         row(bs, "Long Term Debt") + row(bs, "Current Debt"),
+                "total_equity":       row(bs, "Stockholders Equity", "Total Stockholder Equity") or 1,
+                "long_term_debt":     row(bs, "Long Term Debt"),
+                "cash_and_equivalents": row(bs, "Cash And Cash Equivalents") or safe(info.get("totalCash")),
+                "shares_diluted":     shares_yf,
+                "book_value_per_share": safe(info.get("bookValue")),
+                "roe":                safe(info.get("returnOnEquity")),
+                "roic":               0,
+                "gross_margin":       safe(info.get("grossMargins")),
+            }
+        except Exception as e:
+            print(f"  yfinance fallback error ({ticker_str}): {e}")
+
+    # ── 3. 값 추출 ─────────────────────────────────────────────────
+    total_rev    = fund.get("revenue", 0) or safe(info.get("totalRevenue", 0))
+    gross_profit = fund.get("gross_profit", 0)
+    ebit         = fund.get("operating_income", 0)
+    net_income   = fund.get("net_income", 0)
+    eps          = fund.get("eps_diluted", 0) or safe(info.get("trailingEps", 0))
+    ocf          = fund.get("operating_cash_flow", 0)
+    capex        = abs(fund.get("capex", 0))
+    fcf          = fund.get("free_cash_flow", 0) or max(ocf - capex, 0)
+    total_debt   = fund.get("total_debt", 0)
+    lt_debt      = fund.get("long_term_debt", 0)
+    equity       = fund.get("total_equity", 0) or 1
+    total_cash   = fund.get("cash_and_equivalents", 0) or safe(info.get("totalCash", 0))
+    shares_q     = fund.get("shares_diluted", 0)
+    shares       = shares_q if shares_q > 1 else shares_yf
+    book_val     = fund.get("book_value_per_share", 0) or safe(info.get("bookValue", 0))
+    roe          = fund.get("roe", 0) or safe(info.get("returnOnEquity", 0))
+    roic         = fund.get("roic", 0)
+    gross_margin = fund.get("gross_margin", 0) or safe(info.get("grossMargins", 0))
+    d2e          = (total_debt / equity) if equity > 0 else safe(info.get("debtToEquity", 0)) / 100
+    ev           = market_cap + total_debt - total_cash
+
+    # QuickFS는 growth를 직접 안 주므로 yfinance growth 유지
+    rev_growth = safe(info.get("revenueGrowth", 0))
+    earn_growth = safe(info.get("earningsGrowth", 0))
+
+    # ── 4. 이전 연도 데이터 (growth 계산용) ─────────────────────
+    # QuickFS 있으면 2년치 가져오기, 없으면 yfinance growth 사용
+    rev_prev = 0
+    fcf_prev = 0
+    if (qfs_key or QFS_API_KEY):
+        rev_series = qfs_series(company, "revenue",        "Annual", 2, qfs_key or QFS_API_KEY)
+        fcf_series = qfs_series(company, "free_cash_flow", "Annual", 2, qfs_key or QFS_API_KEY)
+        if len(rev_series) >= 2:
+            rev_prev = rev_series[-2]
+        if len(fcf_series) >= 2:
+            fcf_prev = fcf_series[-2]
+
+    # ── 5. FMP-flat 포맷으로 반환 (front-end mapYFToStock 호환) ──
     result = {
-        "financialData": {
-            "currentPrice":        v(price),
-            "freeCashflow":        v(fcf),
-            "operatingCashflow":   v(ocf),
-            "capitalExpenditures": v(capex),
-            "totalCash":           v(total_cash),
-            "totalRevenue":        v(total_rev or safe(info.get("totalRevenue"))),
-            "returnOnEquity":      v(info.get("returnOnEquity")),
-            "returnOnAssets":      v(info.get("returnOnAssets")),
-            "debtToEquity":        v(info.get("debtToEquity")),
-            "grossMargins":        v(info.get("grossMargins")),
-            "earningsGrowth":      v(info.get("earningsGrowth")),
-            "revenueGrowth":       v(info.get("revenueGrowth")),
+        "quote": {
+            "price":            price,
+            "marketCap":        market_cap,
+            "sharesOutstanding":shares,
+            "pe":               pe_yf,
+            "eps":              eps,
+            "name":             name,
+            "exchange":         info.get("exchange") or "",
         },
-        "defaultKeyStatistics": {
-            "sharesOutstanding": v(shares),
-            "trailingEps":       v(info.get("trailingEps")),
-            "bookValue":         v(info.get("bookValue")),
-            "pegRatio":          v(info.get("pegRatio")),
-            "forwardPE":         v(info.get("forwardPE")),
-            "enterpriseValue":   v(info.get("enterpriseValue")),
-            "beta":              v(info.get("beta")),
+        "km": {
+            "roe":                       roe,
+            "roic":                      roic,
+            "debtToEquity":              d2e,
+            "freeCashFlowYield":         fcf / market_cap if market_cap > 0 and fcf > 0 else 0,
+            "pfcfRatio":                 market_cap / fcf if market_cap > 0 and fcf > 0 else 0,
+            "enterpriseValueOverEBITDA": ev / ebit if ebit > 0 else 0,
+            "enterpriseValue":           ev,
+            "peRatio":                   pe_yf,
         },
-        "assetProfile": {
-            "longName":  info.get("longName") or info.get("shortName") or ticker_str,
-            "shortName": info.get("shortName") or ticker_str,
-            "sector":    info.get("sector") or "Unknown",
-            "industry":  info.get("industry") or "",
+        "inc": {
+            "revenue":         total_rev,
+            "grossProfit":     gross_profit,
+            "operatingIncome": ebit,
+            "netIncome":       net_income,
         },
-        "summaryDetail": {
-            "marketCap":     v(market_cap),
-            "previousClose": v(info.get("previousClose")),
-            "trailingPE":    v(info.get("trailingPE")),
+        "incPrev": {"revenue": rev_prev} if rev_prev else None,
+        "cf": {
+            "operatingCashFlow":  ocf,
+            "capitalExpenditure": -capex,   # FMP convention: negative capex
+            "freeCashFlow":       fcf,
         },
-        "incomeStatementHistory": {
-            "incomeStatementHistory": [{
-                "totalRevenue":    v(total_rev or safe(info.get("totalRevenue"))),
-                "grossProfit":     v(gross_profit),
-                "ebit":            v(ebit),
-                "operatingIncome": v(ebit),
-                "netIncome":       v(net_income),
-            }]
+        "cfPrev": {"freeCashFlow": fcf_prev} if fcf_prev else None,
+        "bs": {
+            "totalDebt":             total_debt,
+            "totalEquity":           equity,
+            "totalAssets":           0,
+            "cashAndCashEquivalents":total_cash,
+            "bookValuePerShare":     book_val,
         },
-        "cashflowStatementHistory": {
-            "cashflowStatements": [{"freeCashflow": v(fcf)}]
-        },
-        "balanceSheetHistory": {
-            "balanceSheetStatements": [{
-                "longTermDebt":           v(long_term_debt),
-                "shortLongTermDebt":      v(short_term_debt),
-                "totalStockholderEquity": v(total_equity),
-                "totalAssets":            v(total_assets),
-            }]
+        "_source": "QuickFS+yfinance" if (qfs_key or QFS_API_KEY) else "yfinance",
+        "_sector": sector,
+        "_industry": industry,
+        # yfinance growth 필드 — QuickFS incPrev 없을 때 대시보드 폴백으로 사용
+        "_growth": {
+            "revenueGrowth":  rev_growth,
+            "earningsGrowth": earn_growth,
         },
     }
     return {"quoteSummary": {"result": [result], "error": None}}
 
 
+def build_financials(ticker_str, qfs_key=None, years=5):
+    """
+    N년치 연간 재무 데이터 (DCF 현금창출능력 모델용).
+    QuickFS available → 최대 10년. 없으면 yfinance 4년 폴백.
+    """
+    company    = f"US:{ticker_str}"
+    key        = qfs_key or QFS_API_KEY
+    use_qfs    = bool(key)
+
+    if use_qfs:
+        # ── QuickFS: 5~10년치 연간 데이터 ─────────────────────────
+        METRICS = ["revenue", "operating_cash_flow", "capex",
+                   "cash_and_equivalents", "total_debt", "shares_diluted"]
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+            futs = {ex.submit(qfs_series, company, m, "Annual", years, key): m
+                    for m in METRICS}
+            raw = {}
+            for fut, metric in futs.items():
+                try:
+                    raw[metric] = fut.result()
+                except Exception:
+                    raw[metric] = [0.0] * years
+
+        revenues   = raw.get("revenue",            [0.0] * years)
+        oper_cfs   = raw.get("operating_cash_flow", [0.0] * years)
+        capexs     = [abs(c) for c in raw.get("capex", [0.0] * years)]
+        cash       = raw.get("cash_and_equivalents", [0.0])[-1]
+        total_debt = raw.get("total_debt",           [0.0])[-1]
+        shares     = raw.get("shares_diluted",       [0.0])[-1]
+
+        # 연도 레이블 (오래된 순)
+        cur_yr     = datetime.datetime.now().year
+        year_labels = [str(cur_yr - (years - 1) + i) for i in range(years)]
+        source     = "QuickFS"
+
+    else:
+        # ── yfinance 폴백 ──────────────────────────────────────────
+        t    = yf.Ticker(ticker_str)
+        info = t.info or {}
+        years = 5
+
+        def extract(df, *keys):
+            if df is None or df.empty:
+                return [0.0] * years
+            for k in keys:
+                for idx in df.index:
+                    if k.lower() in str(idx).lower():
+                        vals = []
+                        for col in sorted(df.columns, reverse=True)[:years]:
+                            try:
+                                vals.append(safe(df.loc[idx, col]))
+                            except Exception:
+                                vals.append(0.0)
+                        vals = list(reversed(vals))
+                        while len(vals) < years:
+                            vals.append(0.0)
+                        return vals[:years]
+            return [0.0] * years
+
+        try:
+            revenues = extract(t.income_stmt, "Total Revenue")
+        except Exception:
+            revenues = [0.0] * years
+        try:
+            oper_cfs = extract(t.cash_flow,
+                               "Operating Cash Flow",
+                               "Total Cash From Operating Activities")
+            capexs   = [abs(x) for x in extract(t.cash_flow,
+                                                  "Capital Expenditure",
+                                                  "Purchase Of PPE")]
+        except Exception:
+            oper_cfs = [0.0] * years
+            capexs   = [0.0] * years
+
+        cash       = 0
+        total_debt = 0
+        shares     = safe(info.get("sharesOutstanding", 0))
+        try:
+            bs = t.balance_sheet
+            if bs is not None and not bs.empty:
+                for idx in bs.index:
+                    if "cash" in str(idx).lower():
+                        cash = safe(bs.loc[idx].iloc[0])
+                        break
+                ltd = std = 0
+                for idx in bs.index:
+                    if "long term debt" in str(idx).lower():
+                        ltd = safe(bs.loc[idx].iloc[0])
+                    if "current debt" in str(idx).lower():
+                        std = safe(bs.loc[idx].iloc[0])
+                total_debt = ltd + std
+        except Exception:
+            cash = safe(info.get("totalCash", 0))
+
+        try:
+            cols = sorted(t.income_stmt.columns, reverse=True)[:years]
+            year_labels = [str(c.year) for c in reversed(cols)]
+            while len(year_labels) < years:
+                year_labels.append("")
+        except Exception:
+            cur_yr = datetime.datetime.now().year
+            year_labels = [str(cur_yr - (years - 1) + i) for i in range(years)]
+
+        info2  = t.info or {}
+        source = "yfinance"
+
+    # 가격·이름은 yfinance (실시간)
+    info_f  = _cget(f"yf:info:{ticker_str}") or {}
+    if not info_f:
+        try:
+            info_f = yf.Ticker(ticker_str).info or {}
+            _cset(f"yf:info:{ticker_str}", info_f, PRICE_TTL)
+        except Exception:
+            pass
+    price  = safe(info_f.get("currentPrice") or info_f.get("regularMarketPrice"))
+    name   = info_f.get("longName") or info_f.get("shortName") or ticker_str
+    sector = info_f.get("sector") or ""
+
+    return {
+        "ticker":     ticker_str,
+        "name":       name,
+        "sector":     sector,
+        "price":      price,
+        "shares":     shares,
+        "cash":       round(cash       / 1e6, 2),   # $M
+        "totalDebt":  round(total_debt / 1e6, 2),   # $M
+        "yearLabels": year_labels,
+        "revenues":   [round(r / 1e6, 2) for r in revenues],
+        "operatingCFs":[round(o / 1e6, 2) for o in oper_cfs],
+        "totalCapexs": [round(c / 1e6, 2) for c in capexs],
+        "_source":    source,
+    }
+
+
 def build_chart(ticker_str, range_="6mo"):
+    """주가 차트 (yfinance, 무료)."""
     t = yf.Ticker(ticker_str)
     hist = t.history(period=range_, interval="1mo")
     closes, timestamps = [], []
     for ts, row_data in hist.iterrows():
         c = row_data.get("Close")
-        closes.append(round(float(c), 2) if c is not None and not math.isnan(float(c)) else None)
+        closes.append(round(float(c), 2)
+                      if c is not None and not math.isnan(float(c)) else None)
         try:
             timestamps.append(int(ts.timestamp()))
         except Exception:
@@ -228,97 +560,138 @@ def build_chart(ticker_str, range_="6mo"):
     return {
         "chart": {
             "result": [{
-                "meta": {"symbol": ticker_str.upper()},
-                "timestamp": timestamps,
-                "indicators": {"quote": [{"close": closes}]}
+                "meta":       {"symbol": ticker_str.upper()},
+                "timestamp":  timestamps,
+                "indicators": {"quote": [{"close": closes}]},
             }],
-            "error": None
+            "error": None,
         }
     }
 
 
-# ── Combined HTTP Handler ─────────────────────────────────────────
+# ── HTTP Handler ───────────────────────────────────────────────────
 class Handler(http.server.SimpleHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
-        # Only show data requests
-        if any(p in self.path for p in ['/yf', '/chart']):
-            print(f"  [data] {self.path.split('?')[0]} → {self.path.split('ticker=')[-1].split('&')[0]}")
+        if any(p in self.path for p in ["/yf", "/chart", "/financials", "/qfs"]):
+            tick = self.path.split("ticker=")[-1].split("&")[0] if "ticker=" in self.path else ""
+            src  = "QFS+YF" if (QFS_API_KEY or self.headers.get("X-QFS-Key")) else "YF"
+            print(f"  [{src}] {self.path.split('?')[0]}  {tick}")
 
     def _json(self, code, obj):
         data = json.dumps(obj).encode("utf-8")
         self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Type",  "application/json")
+        self.send_header("Access-Control-Allow-Origin",  "*")
+        self.send_header("Access-Control-Allow-Headers",
+                         "X-QFS-Key, Accept, Content-Type")
         self.end_headers()
         self.wfile.write(data)
 
     def do_OPTIONS(self):
         self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin",  "*")
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers",
+                         "X-QFS-Key, Accept, Content-Type")
         self.end_headers()
 
     def do_GET(self):
-        parsed = urllib.parse.urlparse(self.path)
-        params = urllib.parse.parse_qs(parsed.query)
+        parsed  = urllib.parse.urlparse(self.path)
+        params  = urllib.parse.parse_qs(parsed.query)
+        qfs_key = self.headers.get("X-QFS-Key") or QFS_API_KEY
 
-        # Root URL → redirect directly to dashboard
-        if parsed.path == "/" or parsed.path == "":
+        if parsed.path in ("/", ""):
             self.send_response(302)
-            self.send_header("Location", "/hilliard-buffshire-dashboard.html")
+            self.send_header("Location",
+                             "/hilliard-buffshire-dashboard.html")
             self.end_headers()
             return
 
+        # ── /yf  — 주식 스냅샷 (QuickFS 펀더멘털 + yfinance 가격) ──
         if parsed.path == "/yf":
             ticker = (params.get("ticker", [None])[0] or "").upper().strip()
-            # Yahoo Finance uses hyphens for tickers like BRK-B, not dots (BRK.B)
             ticker = ticker.replace(".", "-")
             if not ticker:
-                self._json(400, {"error": "ticker required"})
-                return
+                self._json(400, {"error": "ticker required"}); return
             try:
-                self._json(200, build_quotesummary(ticker))
+                self._json(200, build_quotesummary(ticker, qfs_key))
             except Exception as e:
                 self._json(500, {"error": str(e)})
 
+        # ── /financials  — 5~10년치 재무 데이터 (CashFlowModeler 용) ──
+        elif parsed.path == "/financials":
+            ticker = (params.get("ticker", [None])[0] or "").upper().strip()
+            ticker = ticker.replace(".", "-")
+            yrs    = int(params.get("years", ["5"])[0])
+            yrs    = max(1, min(10, yrs))
+            if not ticker:
+                self._json(400, {"error": "ticker required"}); return
+            try:
+                self._json(200, build_financials(ticker, qfs_key, yrs))
+            except Exception as e:
+                self._json(500, {"error": str(e)})
+
+        # ── /chart  — 주가 차트 ──────────────────────────────────────
         elif parsed.path == "/chart":
             ticker = (params.get("ticker", [None])[0] or "").upper().strip()
             ticker = ticker.replace(".", "-")
             range_ = params.get("range", ["6mo"])[0]
             if not ticker:
-                self._json(400, {"error": "ticker required"})
-                return
+                self._json(400, {"error": "ticker required"}); return
             try:
                 self._json(200, build_chart(ticker, range_))
             except Exception as e:
                 self._json(500, {"error": str(e)})
 
+        # ── /qfs-test  — API 키 유효성 확인 ─────────────────────────
+        elif parsed.path == "/qfs-test":
+            if not qfs_key:
+                self._json(200, {"ok": False,
+                                 "msg": "API 키 없음 — yfinance 모드로 작동 중"}); return
+            try:
+                vals = qfs_fetch("US:AAPL", "revenue", "TTM", 1, qfs_key)
+                if vals:
+                    self._json(200, {"ok": True,
+                                     "msg": f"✓ QuickFS 연결 성공 (AAPL revenue: ${vals[-1]/1e9:.1f}B)"})
+                else:
+                    self._json(200, {"ok": False,
+                                     "msg": "QuickFS 응답 없음 — 키를 확인하세요"})
+            except Exception as e:
+                self._json(200, {"ok": False, "msg": str(e)})
+
+        # ── /cache-clear  — 캐시 초기화 ─────────────────────────────
+        elif parsed.path == "/cache-clear":
+            with _cache_lock:
+                _cache.clear()
+            self._json(200, {"ok": True, "msg": "캐시 초기화 완료"})
+
         else:
-            # Serve static files normally
             super().do_GET()
 
 
-# ── Main ──────────────────────────────────────────────────────────
+# ── Main ───────────────────────────────────────────────────────────
 if __name__ == "__main__":
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    qfs_status = f"✓ 키 설정됨 ({QFS_API_KEY[:6]}...)" if QFS_API_KEY else "✗ 키 없음 → yfinance 폴백"
     print()
-    print("  ================================================")
+    print("  ════════════════════════════════════════════════")
     print("    Hilliard Buffshire Investment Dashboard")
-    print("  ================================================")
-    print(f"  Open: http://localhost:{PORT}/hilliard-buffshire-dashboard.html")
-    print("  Keep this window open. Close to stop.")
+    print("  ════════════════════════════════════════════════")
+    print(f"  QuickFS : {qfs_status}")
+    print(f"  yfinance: 실시간 가격 (항상 사용)")
+    print(f"  캐시    : 펀더멘털 7일 / 가격 5분")
+    print(f"  Open    : http://localhost:{PORT}")
+    print("  ────────────────────────────────────────────────")
     print()
 
     try:
         server = http.server.HTTPServer(("", PORT), Handler)
     except OSError as e:
-        print(f"  ERROR: Port {PORT} is in use. Close other servers first.")
-        print(f"  Detail: {e}")
+        print(f"  ERROR: Port {PORT} 사용 중. 다른 서버를 먼저 종료하세요.")
         sys.exit(1)
 
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\n  Server stopped.")
-        server.server_close()
+        print("\n  서버 종료.")

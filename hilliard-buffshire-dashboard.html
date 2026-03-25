@@ -525,12 +525,11 @@ const fetchYFChart = async (ticker, range = "6mo") => {
 // ── Bill Ackman 스타일 2단계 DCF ────────────────────────────────
 // Stage 1 (Y1-5):  fullGrowth 으로 FCF 성장
 // Stage 2 (Y6-10): halfGrowth (Stage1 ÷ 2) 로 감속
-// Terminal:        22x FCF Exit Multiple (우량기업 현실적 배수)
-//                  Gordon Growth는 ~13x → 지나치게 보수적
-//                  22x ≈ S&P 500 장기 P/FCF 평균 수준
+// Terminal:        ROIC-기반 exit multiple
+//                  ROIC>25% → 30x | ROIC>15% → 25x | 그 외 → 20x
 // Discount Rate:   10% (Ackman 표준)
 // ----------------------------------------------------------------
-const calcDCF = (fcf, growthRate = 0.08, discountRate = 0.10, terminalGrowth = 0.025, years = 10, shares) => {
+const calcDCF = (fcf, growthRate = 0.08, discountRate = 0.10, exitMultiple = 25, years = 10, shares) => {
   if (!fcf || fcf <= 0 || !shares || shares <= 0) return null;
   const stage1Years = 5;
   const stage2Growth = Math.max(growthRate / 2, 0.02);  // Y6-10 감속 (half growth, min 2%)
@@ -549,9 +548,7 @@ const calcDCF = (fcf, growthRate = 0.08, discountRate = 0.10, terminalGrowth = 0
     totalPV += fcfY / Math.pow(1 + discountRate, i);
   }
 
-  // Terminal Value: 22x FCF 배수 (우량기업 기준, Gordon Growth보다 현실적)
-  // 22x ≈ 10yr avg S&P P/FCF ≈ 1/(dr - tgr) at dr=10%, tgr=4.5%
-  const exitMultiple = 22;
+  // Terminal Value: ROIC 기반 exit multiple
   const pvTerminal = (fcfY * exitMultiple) / Math.pow(1 + discountRate, years);
 
   return Math.round((totalPV + pvTerminal) / shares);
@@ -559,7 +556,7 @@ const calcDCF = (fcf, growthRate = 0.08, discountRate = 0.10, terminalGrowth = 0
 
 // ── MAP YAHOO FINANCE DATA → STOCK OBJECT ────────────────────
 const mapYFToStock = (ticker, data, chartData) => {
-  const { quote = {}, km = {}, inc = {}, incPrev = null, cf = {}, cfPrev = null, bs = {} } = data || {};
+  const { quote = {}, km = {}, inc = {}, incPrev = null, cf = {}, cfPrev = null, bs = {}, _growth = {} } = data || {};
 
   const price             = quote.price || 0;
   const marketCap         = quote.marketCap || 0;
@@ -602,9 +599,10 @@ const mapYFToStock = (ticker, data, chartData) => {
   const invested      = totalEquity + totalDebt;
   const roic          = km.roic != null ? km.roic * 100 : (invested > 0 ? ebit * (1 - taxRate) / invested * 100 : 0);
 
-  // Growth
-  const revenueGrowth  = revenuePrev > 0 && totalRevenue > 0 ? (totalRevenue - revenuePrev) / revenuePrev : 0;
-  const earningsGrowth = fcfPrev > 0 && freeCashflow > 0 ? (freeCashflow - fcfPrev) / fcfPrev : 0;
+  // Growth — incPrev/cfPrev 있으면 실제 계산, 없으면 서버 yfinance growth 필드 폴백
+  const revenueGrowthCalc  = revenuePrev > 0 && totalRevenue > 0 ? (totalRevenue - revenuePrev) / revenuePrev : null;
+  const revenueGrowth      = revenueGrowthCalc !== null ? revenueGrowthCalc : (_growth.revenueGrowth || 0);
+  const earningsGrowth     = fcfPrev > 0 && freeCashflow > 0 ? (freeCashflow - fcfPrev) / fcfPrev : (_growth.earningsGrowth || 0);
 
   // 6-month momentum from Yahoo chart
   let mom6m = 0;
@@ -613,20 +611,32 @@ const mapYFToStock = (ticker, data, chartData) => {
     if (closes.length >= 2) mom6m = (closes[closes.length - 1] - closes[0]) / closes[0] * 100;
   }
 
-  // ── Bill Ackman 스타일 보수적 DCF ───────────────────────────────
-  // 성장률: 매출 성장률의 50% 헤어컷 (보수적), floor 4%, hard cap 10%
-  // 단일 연도 FCF 급등/급락 노이즈 방지를 위해 revenueGrowth 기반 사용
-  const conservativeGrowth = revenueGrowth > 0
-    ? Math.min(Math.max(revenueGrowth * 0.5, 0.04), 0.10)
-    : 0.04;  // 마이너스 성장이면 최소 4% (기업 존속 가정)
-  const cappedGrowthRate = conservativeGrowth;  // alias (하위 참조 유지)
-  const blendedGrowth    = conservativeGrowth;  // alias for _meta
-  const discountRate     = 0.10;                // Ackman: 10% 할인율
-  const netCashPerShare  = sharesOutstanding > 0 ? Math.max(0, totalCashBal - totalDebt) / sharesOutstanding : 0;
-  // FCF 직접 사용 (Owner Earnings 제거 — 과대평가 방지)
-  const dcfFCF  = freeCashflow > 0 ? freeCashflow : (operatingCF > totalCapex ? operatingCF - totalCapex : 0);
-  const dcfBase = calcDCF(dcfFCF, cappedGrowthRate, discountRate, 0.025, 10, sharesOutstanding);
-  // 순현금 조정 후 내재가치; DCF 실패 시 현재가 기준 fallback 제거 (→ null 표시)
+  // ── Bill Ackman 스타일 보수적 2단계 DCF ─────────────────────────
+  // 1. 성장률: 매출성장 × 60%, floor 5%, cap 12%
+  //    yfinance growth 폴백 포함 (incPrev 없을 때)
+  const growthInput = revenueGrowth !== 0 ? revenueGrowth
+    : (earningsGrowth !== 0 ? earningsGrowth * 0.7 : 0);
+  const conservativeGrowth = growthInput > 0
+    ? Math.min(Math.max(growthInput * 0.60, 0.05), 0.12)
+    : 0.06;  // 성장 데이터 없거나 마이너스 → 6% 기본값
+  const cappedGrowthRate = conservativeGrowth;
+  const blendedGrowth    = conservativeGrowth;
+
+  // 2. ROIC 기반 터미널 배수 결정 (ROIC가 높을수록 더 높은 multiple 허용)
+  const roicPct       = roic;  // already in %
+  const terminalMult  = roicPct > 25 ? 30 : roicPct > 15 ? 25 : 20;
+
+  // 3. FCF 정규화: 투자단계 기업(capex 과다)은 OCF × 65% 사용
+  //    FCF/OCF 비율이 40% 미만이면 OCF 기반으로 정규화
+  const discountRate  = 0.10;
+  const fcfOcfRatio   = operatingCF > 0 && freeCashflow > 0 ? freeCashflow / operatingCF : 1;
+  const normalizedFCF = (fcfOcfRatio < 0.40 && operatingCF > 0)
+    ? Math.max(freeCashflow, operatingCF * 0.65)   // capex-heavy → 정규화
+    : (freeCashflow > 0 ? freeCashflow : operatingCF * 0.65);
+  const dcfFCF = normalizedFCF > 0 ? normalizedFCF : 0;
+
+  const netCashPerShare = sharesOutstanding > 0 ? Math.max(0, totalCashBal - totalDebt) / sharesOutstanding : 0;
+  const dcfBase    = calcDCF(dcfFCF, cappedGrowthRate, discountRate, terminalMult, 10, sharesOutstanding);
   const dcfIntrinsic = dcfBase ? Math.round(dcfBase + netCashPerShare) : null;
 
   return {
@@ -752,13 +762,13 @@ const HelpTip = ({
   })));
 };
 const TIPS = {
-  mos: "MoS (Margin of Safety)\n= (내재가치 - 현재가) / 내재가치 × 100\n\nBill Ackman 스타일 2단계 DCF:\n- Stage 1 (Y1-5): FCF × 보수적 성장률\n- Stage 2 (Y6-10): FCF × 감속 성장률 (÷2)\n- Terminal: Gordon Growth @ 2.5%\n- 성장률 = 매출성장 × 50%, floor 4%, cap 10%\n- Discount Rate = 10%\n- Buy Price = 내재가치 × 0.70 (30% 안전마진)",
+  mos: "MoS (Margin of Safety)\n= (내재가치 - 현재가) / 내재가치 × 100\n\n2단계 DCF (Ackman 스타일):\n- FCF 정규화: max(FCF, OCF×65%) — capex 과다 기업 보정\n- 성장률 = 매출성장 × 60%, floor 5%, cap 12%\n- Stage 1 (Y1-5): 전체 성장률\n- Stage 2 (Y6-10): 절반 감속\n- Terminal = ROIC 기반 배수 (20-30x)\n- Discount Rate = 10%\n- Buy Price = 내재가치 × 0.70 (30% 안전마진)",
   val: "Valuation Score (0-100)\n- EV/EBIT (20pts)\n- DCF MoS (18pts)\n- P/FCF (15pts)\n- Owner Earnings (15pts)\n- FCF Growth (12pts)\n- PEG (10pts)\n- Graham# (10pts)",
   qual: "Quality Score (0-100)\n- ROE (20pts)\n- ROIC (18pts)\n- D/E (15pts)\n- FCF Yield (15pts)\n- Gross Margin (15pts)\n- Moat (17pts)",
   quant: "Quant Score (0-100)\n- Williams %R (20pts)\n- A/D Line (15pts)\n- Momentum (15pts)\n- Sentiment (15pts)\n- COT (15pts)\n- 6m Price Mom (10pts)\n- Pattern (10pts)",
   composite: "Composite = Val×35% + Qual×25% + Quant×40%",
   signal: "Strong Buy (80+): 15-20%\nBuy (65-79): 10-15%\nNeutral (50-64): 5-10%\nWatch (35-49): 0-5%\nSell (<35 or 2+): exit",
-  fairValue: "Fair Value = Bill Ackman 2단계 DCF\n기반: FCF (잉여현금흐름) 직접 사용\nStage 1 (Y1-5): 보수적 성장률 (매출성장 × 50% 헤어컷, floor 4%, cap 10%)\nStage 2 (Y6-10): 감속 성장 (Stage1 ÷ 2)\nTerminal: Gordon Growth @ 2.5%\nDiscount Rate: 10%\nBuy Price = 내재가치 × 70% (30% 안전마진)",
+  fairValue: "Fair Value = Bill Ackman 2단계 DCF\n기반: FCF (정규화 — capex 투자단계 기업은 OCF×65% 기준)\nStage 1 (Y1-5): 보수적 성장률 (매출성장 × 60%, floor 5%, cap 12%)\nStage 2 (Y6-10): 감속 성장 (Stage1 ÷ 2)\nTerminal: ROIC 기반 exit multiple\n  ROIC>25%→30x / ROIC>15%→25x / 나머지→20x\nDiscount Rate: 10%\nBuy Price = 내재가치 × 70% (30% 안전마진)",
   sell: "2+ simultaneous = auto-Sell.\nROE<12%, D/E>1.2, Margin<35%, ROIC<7%, FCF Yield<1%, %R overbought, Sentiment>75, Overvalued>10%, EV/EBIT>25x",
   evEbit: "EV/EBIT: Best single-factor backtest\n15.34% CAGR, Sharpe 0.79\nEV/EBIT < 10x = undervalued\n\nSelf-calculated from financial statements",
   pFcf: "P/FCF = MarketCap / FreeCashflow\n< 10 = undervalued\n10-20 = fair\n> 25 = overvalued",
@@ -4512,12 +4522,16 @@ function Dashboard() {
         const idx = i + j;
         if (res.status === "fulfilled") {
           const { stock, mapped } = res.value;
+          // 방어적 머지: 서버가 0 반환 시 기존 값 유지 (yfinance 실패 시 데이터 소실 방지)
+          const merge = (newVal, oldVal) => (newVal && newVal !== 0) ? newVal : (oldVal || newVal);
           results[idx] = {
             ...stock, ...mapped,
-            sector: stock.sector || mapped.sector,
-            moatRating: stock.moatRating, williamsR: stock.williamsR,
-            williamsAD: stock.williamsAD, sentimentWSI: stock.sentimentWSI,
-            cotIndex: stock.cotIndex, seasonal: stock.seasonal,
+            price:        merge(mapped.price, stock.price),
+            totalRevenue: merge(mapped._meta?.totalRevenue, stock._meta?.totalRevenue),
+            sector:       stock.sector || mapped.sector,
+            moatRating:   stock.moatRating, williamsR: stock.williamsR,
+            williamsAD:   stock.williamsAD, sentimentWSI: stock.sentimentWSI,
+            cotIndex:     stock.cotIndex, seasonal: stock.seasonal,
             pricePattern: stock.pricePattern
           };
           ok++;

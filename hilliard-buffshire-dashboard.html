@@ -600,7 +600,7 @@ const mapYFToStock = (ticker, data, chartData) => {
   const totalEquity   = bs.totalEquity || 1;
   const totalAssets   = bs.totalAssets || 1;
   const totalCashBal  = bs.cashAndCashEquivalents || 0;
-  const bookValue     = bs.bookValuePerShare || (totalEquity / sharesOutstanding) || 0;
+  const bookValue     = bs.bookValuePerShare || (sharesOutstanding > 1e6 ? totalEquity / sharesOutstanding : 0) || 0;
   const enterpriseValue = km.enterpriseValue || (marketCap + totalDebt - totalCashBal) || marketCap;
   const peg           = 0; // FMP key-metrics doesn't include PEG in free tier
 
@@ -609,7 +609,8 @@ const mapYFToStock = (ticker, data, chartData) => {
   const grossMargin   = totalRevenue > 0 ? grossProfit / totalRevenue * 100 : 0;
   const fcfYield      = km.freeCashFlowYield != null ? km.freeCashFlowYield * 100 : (marketCap > 0 && freeCashflow > 0 ? freeCashflow / marketCap * 100 : 0);
   const debtToEquity  = km.debtToEquity != null ? km.debtToEquity : (totalEquity > 0 ? totalDebt / totalEquity : 0);
-  const fcfPerShare   = freeCashflow > 0 ? freeCashflow / sharesOutstanding : 0;
+  // safeShares는 아래 DCF 섹션에서 정의됨 — 여기선 sharesOutstanding 직접 사용하되 0 방어
+  const fcfPerShare   = freeCashflow > 0 && sharesOutstanding > 1e6 ? freeCashflow / sharesOutstanding : 0;
   const pFcf          = km.pfcfRatio || (marketCap > 0 && freeCashflow > 0 ? marketCap / freeCashflow : 0);
   const ownerEarningsYield = marketCap > 0 && freeCashflow > 0 ? freeCashflow * 0.85 / marketCap * 100 : 0;
   const evEbit        = km.enterpriseValueOverEBITDA || (enterpriseValue > 0 && ebit > 0 ? enterpriseValue / ebit : 0);
@@ -658,9 +659,16 @@ const mapYFToStock = (ticker, data, chartData) => {
     : (freeCashflow > 0 ? freeCashflow : (operatingCF > 0 ? operatingCF * 0.65 : 0));
   const dcfFCF = normalizedFCF > 0 ? normalizedFCF : 0;
 
-  const netCashPerShare = sharesOutstanding > 1e6 ? Math.max(0, totalCashBal - totalDebt) / sharesOutstanding : 0;
-  const dcfBase      = calcDCF(dcfFCF, cappedGrowthRate, discountRate, terminalMult, 10, sharesOutstanding);
-  const dcfIntrinsic = dcfBase ? Math.round(dcfBase + netCashPerShare) : null;
+  // shares=0 방어: FCF/sharesOutstanding 계산에서 Infinity 방지
+  const safeShares = sharesOutstanding > 1e6 ? sharesOutstanding : 0;
+
+  const netCashPerShare = safeShares > 1e6 ? Math.max(0, totalCashBal - totalDebt) / safeShares : 0;
+  const dcfBase      = calcDCF(dcfFCF, cappedGrowthRate, discountRate, terminalMult, 10, safeShares);
+
+  // 비현실적 DCF 필터: 현재가의 0.1배 미만 or 100배 초과 → 데이터 오류로 null 처리
+  const dcfRaw = dcfBase != null ? Math.round(dcfBase + netCashPerShare) : null;
+  const dcfIntrinsic = (dcfRaw != null && price > 0 && dcfRaw > price * 0.05 && dcfRaw < price * 100)
+    ? dcfRaw : null;
 
   return {
     ticker: ticker.toUpperCase(),

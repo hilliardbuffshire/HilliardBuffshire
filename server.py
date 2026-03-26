@@ -189,42 +189,94 @@ def build_quotesummary(ticker_str, qfs_key=None):
     company = f"US:{ticker_str}"
 
     # ── 1. yfinance: 실시간 가격·시장 데이터 ──────────────────────
-    yf_ck = f"yf:info:{ticker_str}"
-    info  = _cget(yf_ck)
-    if info is None:
+    # Ticker 객체 하나로 info + fast_info 모두 수집 (rate-limit 방지)
+    yf_ck = f"yf:bundle:{ticker_str}"
+    _yf_bundle = _cget(yf_ck)
+    if _yf_bundle is None:
+        _yf_bundle = {"info": {}, "price": 0.0, "shares": 0.0, "mktcap": 0.0}
         try:
-            info = yf.Ticker(ticker_str).info or {}
-        except Exception:
-            info = {}
-        _cset(yf_ck, info, PRICE_TTL)
-
-    # fast_info.last_price — 가장 정확하고 빠른 현재가 (지연 없음)
-    price_ck = f"yf:price:{ticker_str}"
-    price    = _cget(price_ck)
-    if price is None:
-        price = 0.0
-        # ① fast_info 시도 (가장 신뢰성 높음)
-        try:
-            fi = yf.Ticker(ticker_str).fast_info
-            price = float(getattr(fi, "last_price", None) or
-                          getattr(fi, "lastPrice", None) or 0.0)
-        except Exception:
-            pass
-        # ② history 폴백
-        if not price:
+            _t = yf.Ticker(ticker_str)
+            # fast_info 먼저 (빠르고 신뢰성 높음)
             try:
-                hist  = yf.Ticker(ticker_str).history(period="5d")
-                price = float(hist["Close"].dropna().iloc[-1]) if not hist.empty else 0.0
+                fi = _t.fast_info
+                # last_price: 실시간 가격 (장중) — None 반환 시 previous_close 폴백
+                _lp = (getattr(fi, "last_price",  None) or
+                       getattr(fi, "lastPrice",   None))
+                # previous_close: 전일 종가 — JPM 등 일부 종목에서 last_price 실패 시 사용
+                _pc = (getattr(fi, "regular_market_previous_close", None) or
+                       getattr(fi, "regularMarketPreviousClose",    None) or
+                       getattr(fi, "previous_close",                None) or
+                       getattr(fi, "previousClose",                 None))
+                _yf_bundle["price"]  = float(_lp or _pc or 0.0)
+                _yf_bundle["shares"] = float(getattr(fi, "shares",      None) or
+                                             getattr(fi, "sharesOutstanding", None) or 0.0)
+                _yf_bundle["mktcap"] = float(getattr(fi, "market_cap",  None) or
+                                             getattr(fi, "marketCap",   None) or 0.0)
+                if not _yf_bundle["price"]:
+                    print(f"  {ticker_str}: fast_info 가격 없음 (last={_lp}, prev={_pc})")
+            except Exception as _fi_err:
+                print(f"  {ticker_str}: fast_info 오류: {_fi_err}")
+            # info dict (메타 정보 — 섹터, 이름 등)
+            try:
+                _yf_bundle["info"] = _t.info or {}
             except Exception:
                 pass
-        # ③ info 폴백
-        if not price:
-            price = safe(info.get("regularMarketPrice") or info.get("currentPrice"))
-        if price:
-            _cset(price_ck, price, PRICE_TTL)
-    price = price or safe(info.get("regularMarketPrice") or info.get("currentPrice"))
-    market_cap = safe(info.get("marketCap"))
-    shares_yf  = safe(info.get("sharesOutstanding")) or 1
+            # price 폴백 1: info 필드
+            if not _yf_bundle["price"]:
+                _yf_bundle["price"] = safe(
+                    _yf_bundle["info"].get("regularMarketPrice") or
+                    _yf_bundle["info"].get("currentPrice") or
+                    _yf_bundle["info"].get("previousClose"))
+            # price 폴백 2: history (1d → 5d 순서로 시도)
+            if not _yf_bundle["price"]:
+                for _period in ("1d", "5d"):
+                    try:
+                        hist = _t.history(period=_period)
+                        if not hist.empty:
+                            _yf_bundle["price"] = float(hist["Close"].dropna().iloc[-1])
+                            print(f"  {ticker_str}: history({_period}) 가격 사용 = {_yf_bundle['price']:.2f}")
+                            break
+                    except Exception:
+                        pass
+            # shares 폴백: info 필드 여러 개 시도
+            if not _yf_bundle["shares"]:
+                for _sk in ["sharesOutstanding", "impliedSharesOutstanding", "floatShares"]:
+                    v = safe(_yf_bundle["info"].get(_sk))
+                    if v and v > 1e6:
+                        _yf_bundle["shares"] = v
+                        break
+            # shares 최종 폴백: 시총 / 가격 추정
+            if (not _yf_bundle["shares"] or _yf_bundle["shares"] < 1e6) and \
+               _yf_bundle["mktcap"] > 0 and _yf_bundle["price"] > 0:
+                _yf_bundle["shares"] = _yf_bundle["mktcap"] / _yf_bundle["price"]
+                print(f"  {ticker_str}: 주식수 추정(시총÷가격) = {_yf_bundle['shares']/1e9:.2f}B")
+            # mktcap 폴백
+            if not _yf_bundle["mktcap"]:
+                _yf_bundle["mktcap"] = safe(_yf_bundle["info"].get("marketCap"))
+        except Exception as e:
+            print(f"  {ticker_str} yfinance 오류: {e}")
+        _cset(yf_ck, _yf_bundle, PRICE_TTL)
+
+    info       = _yf_bundle["info"]
+    price      = _yf_bundle["price"] or 0.0
+    # ── shares_yf: 0 이면 1.0 으로 임시 설정 (아래서 market_cap으로 재추정)
+    _shares_raw = _yf_bundle["shares"]
+    shares_yf   = _shares_raw if _shares_raw > 1e6 else 0.0  # 1M 미만 → 0 (신뢰불가)
+    market_cap  = _yf_bundle["mktcap"] or safe(info.get("marketCap"))
+    # market_cap 폴백: info 추가 필드
+    if not market_cap:
+        market_cap = safe(info.get("marketCap") or info.get("enterpriseValue"))
+    # shares_yf 폴백: market_cap ÷ price (가장 신뢰성 높음)
+    if not shares_yf and market_cap > 0 and price > 0:
+        shares_yf = market_cap / price
+        print(f"  {ticker_str}: 주식수 → 시총/가격 = {shares_yf/1e9:.3f}B")
+    # market_cap 폴백: price × shares (shares가 있을 때)
+    if not market_cap and price > 0 and shares_yf > 1e6:
+        market_cap = price * shares_yf
+    # 최종 안전장치: 여전히 0이면 최소값 설정 (FCF per share 계산 방지)
+    if not shares_yf:
+        shares_yf = 1.0   # frontend 가드(< 1e6)가 DCF null 반환 처리함
+
     pe_yf      = safe(info.get("trailingPE") or info.get("forwardPE"))
     beta       = safe(info.get("beta") or 1)
     name       = info.get("longName") or info.get("shortName") or ticker_str
@@ -332,7 +384,9 @@ def build_quotesummary(ticker_str, qfs_key=None):
     equity       = fund.get("total_equity", 0) or 1
     total_cash   = fund.get("cash_and_equivalents", 0) or safe(info.get("totalCash", 0))
     shares_q     = fund.get("shares_diluted", 0)
-    shares       = shares_q if shares_q > 1 else shares_yf
+    # 1M 이상이어야 유효한 주식수 (공개기업 최소 기준)
+    # shares_yf는 위에서 market_cap/price로 재추정한 값
+    shares       = shares_q if shares_q > 1e6 else shares_yf
     book_val     = fund.get("book_value_per_share", 0) or safe(info.get("bookValue", 0))
     roe          = fund.get("roe", 0) or safe(info.get("returnOnEquity", 0))
     roic         = fund.get("roic", 0)
@@ -516,17 +570,13 @@ def build_financials(ticker_str, qfs_key=None, years=5):
         info2  = t.info or {}
         source = "yfinance"
 
-    # 가격·이름은 yfinance (실시간)
-    info_f  = _cget(f"yf:info:{ticker_str}") or {}
-    if not info_f:
-        try:
-            info_f = yf.Ticker(ticker_str).info or {}
-            _cset(f"yf:info:{ticker_str}", info_f, PRICE_TTL)
-        except Exception:
-            pass
-    price  = safe(info_f.get("currentPrice") or info_f.get("regularMarketPrice"))
-    name   = info_f.get("longName") or info_f.get("shortName") or ticker_str
-    sector = info_f.get("sector") or ""
+    # 가격·이름은 build_quotesummary 에서 이미 수집된 bundle 재사용
+    _bk = f"yf:bundle:{ticker_str}"
+    _b  = _cget(_bk) or {}
+    price  = _b.get("price") or 0.0
+    _info2 = _b.get("info") or {}
+    name   = _info2.get("longName") or _info2.get("shortName") or ticker_str
+    sector = _info2.get("sector") or ""
 
     return {
         "ticker":     ticker_str,

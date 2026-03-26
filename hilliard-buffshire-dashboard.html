@@ -521,36 +521,52 @@ const fetchYFChart = async (ticker, range = "6mo") => {
   return json.chart.result[0];
 };
 
-// ── SELF-CALCULATED DCF ──────────────────────────────────────
-// ── Bill Ackman 스타일 2단계 DCF ────────────────────────────────
-// Stage 1 (Y1-5):  fullGrowth 으로 FCF 성장
-// Stage 2 (Y6-10): halfGrowth (Stage1 ÷ 2) 로 감속
-// Terminal:        ROIC-기반 exit multiple
-//                  ROIC>25% → 30x | ROIC>15% → 25x | 그 외 → 20x
-// Discount Rate:   10% (Ackman 표준)
+// ── 섹터별 DCF 파라미터 설정 ──────────────────────────────────────
+// growthFloor: 최소성장률 | growthCap: 최대성장률
+// termLow/Mid/High: ROIC에 따라 선택 (ROIC<15% / 15-25% / >25%)
+const SECTOR_DCF_CONFIG = {
+  "Technology":             { growthFloor:0.07, growthCap:0.15, termLow:22, termMid:28, termHigh:35 },
+  "Communication Services": { growthFloor:0.05, growthCap:0.12, termLow:18, termMid:23, termHigh:28 },
+  "Consumer Discretionary": { growthFloor:0.05, growthCap:0.12, termLow:16, termMid:20, termHigh:25 },
+  "Consumer Defensive":     { growthFloor:0.03, growthCap:0.08, termLow:16, termMid:19, termHigh:22 },
+  "Healthcare":             { growthFloor:0.04, growthCap:0.10, termLow:18, termMid:22, termHigh:26 },
+  "Financial Services":     { growthFloor:0.03, growthCap:0.08, termLow:12, termMid:15, termHigh:18 },
+  "Energy":                 { growthFloor:0.02, growthCap:0.08, termLow:10, termMid:13, termHigh:16 },
+  "Industrials":            { growthFloor:0.04, growthCap:0.10, termLow:15, termMid:18, termHigh:21 },
+  "Materials":              { growthFloor:0.03, growthCap:0.08, termLow:12, termMid:15, termHigh:18 },
+  "Basic Materials":        { growthFloor:0.03, growthCap:0.08, termLow:12, termMid:15, termHigh:18 },
+  "Real Estate":            { growthFloor:0.03, growthCap:0.07, termLow:14, termMid:17, termHigh:20 },
+  "Utilities":              { growthFloor:0.02, growthCap:0.06, termLow:13, termMid:16, termHigh:18 },
+};
+const DCF_SECTOR_DEFAULT = { growthFloor:0.04, growthCap:0.10, termLow:16, termMid:20, termHigh:24 };
+
+// ── 섹터 오버라이드: yfinance 분류 오류 수동 보정 ──────────────────
+// TSLA: yfinance가 Consumer Cyclical/Discretionary로 분류하지만 실질적 기술주
+const SECTOR_OVERRIDE = {
+  "TSLA": "Technology",   // EV + FSD + Dojo AI + Energy Storage → 기술주 멀티플 적용
+};
+
+// ── 2단계 DCF (Bill Ackman 스타일, 섹터별 멀티플) ────────────────
+// Stage 1 (Y1-5): 전체 성장률  |  Stage 2 (Y6-10): 절반 감속
+// Terminal: 섹터+ROIC 기반 exit multiple (10~35x)
+// Discount Rate: 10%
+// ※ shares < 1백만 = 데이터 오류 → null 반환
 // ----------------------------------------------------------------
 const calcDCF = (fcf, growthRate = 0.08, discountRate = 0.10, exitMultiple = 25, years = 10, shares) => {
-  if (!fcf || fcf <= 0 || !shares || shares <= 0) return null;
+  if (!fcf || fcf <= 0 || !shares || shares < 1e6) return null;
   const stage1Years = 5;
-  const stage2Growth = Math.max(growthRate / 2, 0.02);  // Y6-10 감속 (half growth, min 2%)
-  let totalPV = 0;
-  let fcfY = fcf;
+  const stage2Growth = Math.max(growthRate / 2, 0.02);
+  let totalPV = 0, fcfY = fcf;
 
-  // Stage 1: Y1–5 (전체 성장률)
   for (let i = 1; i <= stage1Years; i++) {
-    fcfY = fcfY * (1 + growthRate);
+    fcfY *= (1 + growthRate);
     totalPV += fcfY / Math.pow(1 + discountRate, i);
   }
-
-  // Stage 2: Y6–10 (감속)
   for (let i = stage1Years + 1; i <= years; i++) {
-    fcfY = fcfY * (1 + stage2Growth);
+    fcfY *= (1 + stage2Growth);
     totalPV += fcfY / Math.pow(1 + discountRate, i);
   }
-
-  // Terminal Value: ROIC 기반 exit multiple
   const pvTerminal = (fcfY * exitMultiple) / Math.pow(1 + discountRate, years);
-
   return Math.round((totalPV + pvTerminal) / shares);
 };
 
@@ -560,7 +576,9 @@ const mapYFToStock = (ticker, data, chartData) => {
 
   const price             = quote.price || 0;
   const marketCap         = quote.marketCap || 0;
-  const sharesOutstanding = quote.sharesOutstanding || 1;
+  // shares 최소 1M 보장 — 1 이하이면 데이터 오류 (DCF null 처리됨)
+  const sharesOutstanding = (quote.sharesOutstanding > 1e6) ? quote.sharesOutstanding
+    : (marketCap > 0 && price > 0 ? marketCap / price : 0);
   const pe                = quote.pe || km.peRatio || 0;
   const eps               = quote.eps || 0;
 
@@ -611,38 +629,43 @@ const mapYFToStock = (ticker, data, chartData) => {
     if (closes.length >= 2) mom6m = (closes[closes.length - 1] - closes[0]) / closes[0] * 100;
   }
 
-  // ── Bill Ackman 스타일 보수적 2단계 DCF ─────────────────────────
-  // 1. 성장률: 매출성장 × 60%, floor 5%, cap 12%
-  //    yfinance growth 폴백 포함 (incPrev 없을 때)
+  // ── 섹터별 2단계 DCF (Bill Ackman 스타일) ───────────────────────
+  // SECTOR_OVERRIDE 우선 확인 → yfinance 섹터 → Unknown
+  const rawSector  = data?._sector || "Unknown";
+  const sectorKey  = SECTOR_OVERRIDE[ticker.toUpperCase()] || rawSector;
+  const dcfCfg     = SECTOR_DCF_CONFIG[sectorKey] || DCF_SECTOR_DEFAULT;
+
+  // 1. 성장률: 매출성장 × 60%, 섹터별 floor/cap 적용
   const growthInput = revenueGrowth !== 0 ? revenueGrowth
     : (earningsGrowth !== 0 ? earningsGrowth * 0.7 : 0);
   const conservativeGrowth = growthInput > 0
-    ? Math.min(Math.max(growthInput * 0.60, 0.05), 0.12)
-    : 0.06;  // 성장 데이터 없거나 마이너스 → 6% 기본값
+    ? Math.min(Math.max(growthInput * 0.60, dcfCfg.growthFloor), dcfCfg.growthCap)
+    : dcfCfg.growthFloor + 0.01;  // 데이터 없거나 마이너스 → floor + 1%
   const cappedGrowthRate = conservativeGrowth;
   const blendedGrowth    = conservativeGrowth;
 
-  // 2. ROIC 기반 터미널 배수 결정 (ROIC가 높을수록 더 높은 multiple 허용)
-  const roicPct       = roic;  // already in %
-  const terminalMult  = roicPct > 25 ? 30 : roicPct > 15 ? 25 : 20;
+  // 2. 섹터 + ROIC 기반 터미널 배수
+  const roicPct    = roic;
+  const terminalMult = roicPct > 25 ? dcfCfg.termHigh
+                     : roicPct > 15 ? dcfCfg.termMid
+                     : dcfCfg.termLow;
 
-  // 3. FCF 정규화: 투자단계 기업(capex 과다)은 OCF × 65% 사용
-  //    FCF/OCF 비율이 40% 미만이면 OCF 기반으로 정규화
+  // 3. FCF 정규화: FCF/OCF < 40% 면 OCF × 65% 사용 (capex 투자단계 기업)
   const discountRate  = 0.10;
   const fcfOcfRatio   = operatingCF > 0 && freeCashflow > 0 ? freeCashflow / operatingCF : 1;
   const normalizedFCF = (fcfOcfRatio < 0.40 && operatingCF > 0)
-    ? Math.max(freeCashflow, operatingCF * 0.65)   // capex-heavy → 정규화
-    : (freeCashflow > 0 ? freeCashflow : operatingCF * 0.65);
+    ? Math.max(freeCashflow, operatingCF * 0.65)
+    : (freeCashflow > 0 ? freeCashflow : (operatingCF > 0 ? operatingCF * 0.65 : 0));
   const dcfFCF = normalizedFCF > 0 ? normalizedFCF : 0;
 
-  const netCashPerShare = sharesOutstanding > 0 ? Math.max(0, totalCashBal - totalDebt) / sharesOutstanding : 0;
-  const dcfBase    = calcDCF(dcfFCF, cappedGrowthRate, discountRate, terminalMult, 10, sharesOutstanding);
+  const netCashPerShare = sharesOutstanding > 1e6 ? Math.max(0, totalCashBal - totalDebt) / sharesOutstanding : 0;
+  const dcfBase      = calcDCF(dcfFCF, cappedGrowthRate, discountRate, terminalMult, 10, sharesOutstanding);
   const dcfIntrinsic = dcfBase ? Math.round(dcfBase + netCashPerShare) : null;
 
   return {
     ticker: ticker.toUpperCase(),
     name:   quote.name || ticker,
-    sector: data?._sector || "Unknown",
+    sector: sectorKey,   // SECTOR_OVERRIDE 적용된 섹터 표시
     price:  parseFloat(price.toFixed(2)),
     fcfPerShare:         parseFloat(fcfPerShare.toFixed(2)),
     roe:                 parseFloat(roe.toFixed(1)),
@@ -768,7 +791,7 @@ const TIPS = {
   quant: "Quant Score (0-100)\n- Williams %R (20pts)\n- A/D Line (15pts)\n- Momentum (15pts)\n- Sentiment (15pts)\n- COT (15pts)\n- 6m Price Mom (10pts)\n- Pattern (10pts)",
   composite: "Composite = Val×35% + Qual×25% + Quant×40%",
   signal: "Strong Buy (80+): 15-20%\nBuy (65-79): 10-15%\nNeutral (50-64): 5-10%\nWatch (35-49): 0-5%\nSell (<35 or 2+): exit",
-  fairValue: "Fair Value = Bill Ackman 2단계 DCF\n기반: FCF (정규화 — capex 투자단계 기업은 OCF×65% 기준)\nStage 1 (Y1-5): 보수적 성장률 (매출성장 × 60%, floor 5%, cap 12%)\nStage 2 (Y6-10): 감속 성장 (Stage1 ÷ 2)\nTerminal: ROIC 기반 exit multiple\n  ROIC>25%→30x / ROIC>15%→25x / 나머지→20x\nDiscount Rate: 10%\nBuy Price = 내재가치 × 70% (30% 안전마진)",
+  fairValue: "Fair Value = 섹터별 2단계 DCF\n\n기반: FCF (정규화 — capex 투자단계는 OCF×65% 보정)\n성장률: 매출성장 × 60%, 섹터별 floor/cap\n  Tech: floor 7%, cap 15% / Comm: 5-12% / Healthcare: 4-10%\n  Consumer Def: 3-8% / Financials: 3-8% / Energy: 2-8%\n\nTerminal Exit Multiple (섹터+ROIC 기반):\n  Tech: 22-35x | Comm: 18-28x | Healthcare: 18-26x\n  Consumer Def: 16-22x | Financials: 12-18x | Energy: 10-16x\n  ROIC>25%→High배수 / 15-25%→Mid / <15%→Low\n\nDiscount Rate: 10%\nBuy Price = 내재가치 × 0.70 (30% 안전마진)",
   sell: "2+ simultaneous = auto-Sell.\nROE<12%, D/E>1.2, Margin<35%, ROIC<7%, FCF Yield<1%, %R overbought, Sentiment>75, Overvalued>10%, EV/EBIT>25x",
   evEbit: "EV/EBIT: Best single-factor backtest\n15.34% CAGR, Sharpe 0.79\nEV/EBIT < 10x = undervalued\n\nSelf-calculated from financial statements",
   pFcf: "P/FCF = MarketCap / FreeCashflow\n< 10 = undervalued\n10-20 = fair\n> 25 = overvalued",
@@ -1057,7 +1080,7 @@ const UniverseScreener = ({ L, initialSig }) => {
             const dcfIntrinsic = null; // 전체 재무 데이터 없이는 DCF 계산 불가
             return {
               ticker, name: quote.name || name,
-              sector: data._sector || sector,
+              sector: SECTOR_OVERRIDE[ticker.toUpperCase()] || data._sector || sector,
               price: parseFloat(price.toFixed(2)),
               pe: parseFloat((pe || 0).toFixed(1)),
               eps: parseFloat((eps || 0).toFixed(2)),

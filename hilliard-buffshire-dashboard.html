@@ -4553,17 +4553,29 @@ function Dashboard() {
         const idx = i + j;
         if (res.status === "fulfilled") {
           const { stock, mapped } = res.value;
-          // 방어적 머지: 서버가 0 반환 시 기존 값 유지 (yfinance 실패 시 데이터 소실 방지)
-          const merge = (newVal, oldVal) => (newVal && newVal !== 0) ? newVal : (oldVal || newVal);
+          // 방어적 머지: 서버가 0/null 반환 시 기존 저장값 유지 (yfinance 실패 시 데이터 소실 방지)
+          const merge = (newVal, oldVal) => (newVal != null && newVal !== 0) ? newVal : (oldVal || newVal);
           results[idx] = {
             ...stock, ...mapped,
-            price:        merge(mapped.price, stock.price),
-            totalRevenue: merge(mapped._meta?.totalRevenue, stock._meta?.totalRevenue),
-            sector:       stock.sector || mapped.sector,
-            moatRating:   stock.moatRating, williamsR: stock.williamsR,
-            williamsAD:   stock.williamsAD, sentimentWSI: stock.sentimentWSI,
-            cotIndex:     stock.cotIndex, seasonal: stock.seasonal,
-            pricePattern: stock.pricePattern
+            // 핵심 가격·밸류에이션 필드: 신규값이 없으면 이전 저장값 보존
+            price:          merge(mapped.price, stock.price),
+            dcfIntrinsic:   merge(mapped.dcfIntrinsic, stock.dcfIntrinsic),
+            pe:             merge(mapped.pe, stock.pe),
+            roe:            merge(mapped.roe, stock.roe),
+            roic:           merge(mapped.roic, stock.roic),
+            debtToEquity:   merge(mapped.debtToEquity, stock.debtToEquity),
+            fcfYield:       merge(mapped.fcfYield, stock.fcfYield),
+            fcfPerShare:    merge(mapped.fcfPerShare, stock.fcfPerShare),
+            grossMargin:    merge(mapped.grossMargin, stock.grossMargin),
+            evEbit:         merge(mapped.evEbit, stock.evEbit),
+            pFcf:           merge(mapped.pFcf, stock.pFcf),
+            totalRevenue:   merge(mapped._meta?.totalRevenue, stock._meta?.totalRevenue),
+            // 유저 직접 입력 필드: 항상 기존값 유지
+            sector:         stock.sector || mapped.sector,
+            moatRating:     stock.moatRating, williamsR:     stock.williamsR,
+            williamsAD:     stock.williamsAD, sentimentWSI:  stock.sentimentWSI,
+            cotIndex:       stock.cotIndex,   seasonal:      stock.seasonal,
+            pricePattern:   stock.pricePattern
           };
           ok++;
         } else { fail++; }

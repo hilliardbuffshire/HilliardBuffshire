@@ -66,6 +66,19 @@ except ImportError:
         print("  ERROR: pip install requests 를 먼저 실행하세요")
         sys.exit(1)
 
+# ── yfinance 전용 세션 (Render 등 클라우드에서 Yahoo Finance rate-limit 우회) ──
+# Yahoo Finance는 클라우드 IP에서 빈 User-Agent를 차단하는 경우가 많음
+_YF_SESSION = req.Session()
+_YF_SESSION.headers.update({
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
+    ),
+    "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "Accept-Encoding": "gzip, deflate, br",
+})
 
 # ── In-memory cache (서버 실행 중 유지) ───────────────────────────
 _cache      = {}
@@ -195,7 +208,7 @@ def build_quotesummary(ticker_str, qfs_key=None):
     if _yf_bundle is None:
         _yf_bundle = {"info": {}, "price": 0.0, "shares": 0.0, "mktcap": 0.0}
         try:
-            _t = yf.Ticker(ticker_str)
+            _t = yf.Ticker(ticker_str, session=_YF_SESSION)
             # fast_info 먼저 (빠르고 신뢰성 높음)
             try:
                 fi = _t.fast_info
@@ -238,6 +251,20 @@ def build_quotesummary(ticker_str, qfs_key=None):
                             break
                     except Exception:
                         pass
+            # price 폴백 3: yf.download (다른 API 엔드포인트 — 클라우드 rate-limit 우회에 효과적)
+            if not _yf_bundle["price"]:
+                try:
+                    _dl = yf.download(
+                        ticker_str, period="5d", progress=False,
+                        auto_adjust=True, actions=False
+                    )
+                    if not _dl.empty and "Close" in _dl.columns:
+                        _last = _dl["Close"].dropna().iloc[-1]
+                        if _last > 0:
+                            _yf_bundle["price"] = float(_last)
+                            print(f"  {ticker_str}: yf.download 가격 사용 = {_yf_bundle['price']:.2f}")
+                except Exception as _dl_err:
+                    print(f"  {ticker_str}: yf.download 오류: {_dl_err}")
             # shares 폴백: info 필드 여러 개 시도
             if not _yf_bundle["shares"]:
                 for _sk in ["sharesOutstanding", "impliedSharesOutstanding", "floatShares"]:

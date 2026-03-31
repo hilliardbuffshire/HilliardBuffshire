@@ -1,1 +1,3 @@
 yfinance
+curl-cffi
+requests

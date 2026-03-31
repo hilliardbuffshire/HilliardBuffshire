@@ -592,7 +592,13 @@ const mapYFToStock = (ticker, data, chartData) => {
   // Cash flow
   const operatingCF   = cf.operatingCashFlow || 0;
   const totalCapex    = Math.abs(cf.capitalExpenditure || 0);
-  const freeCashflow  = cf.freeCashFlow || (operatingCF - totalCapex) || 0;
+  const _fcfRaw       = cf.freeCashFlow || (operatingCF - totalCapex) || 0;
+  // 은행 등 전통 FCF 미보고 업종 폴백 (JPM 등):
+  // 서버가 freeCashflow=0, operatingCF=0 모두 반환 시 → netIncome×0.7 → eps×shares×0.7 순으로 시도
+  const _netIncomeTmp = inc.netIncome || 0;
+  const freeCashflow  = _fcfRaw > 0 ? _fcfRaw
+    : (_netIncomeTmp > 0 ? _netIncomeTmp * 0.7
+    : (eps > 0 && sharesOutstanding > 1e6 ? eps * sharesOutstanding * 0.7 : 0));
   const fcfPrev       = cfPrev?.freeCashFlow || 0;
 
   // Balance sheet

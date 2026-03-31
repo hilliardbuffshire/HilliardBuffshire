@@ -413,7 +413,7 @@ def build_quotesummary(ticker_str, qfs_key=None):
     if not fund:
         fund = {}
         try:
-            t = yf.Ticker(ticker_str)
+            t = yf.Ticker(ticker_str, session=_YF_SESSION)  # 세션 필수 (Render rate-limit 우회)
             cf = t.cash_flow
             bs = t.balance_sheet
             inc = t.income_stmt
@@ -465,24 +465,23 @@ def build_quotesummary(ticker_str, qfs_key=None):
     total_rev    = fund.get("revenue", 0) or safe(info.get("totalRevenue", 0))
     gross_profit = fund.get("gross_profit", 0)
     ebit         = fund.get("operating_income", 0)
-    net_income   = fund.get("net_income", 0)
+    # net_income: QuickFS → yfinance info 다중 키 폴백
+    net_income   = (fund.get("net_income", 0)
+                    or safe(info.get("netIncomeToCommon", 0))
+                    or safe(info.get("netIncome", 0)))
     eps          = fund.get("eps_diluted", 0) or safe(info.get("trailingEps", 0))
     ocf          = fund.get("operating_cash_flow", 0)
     capex        = abs(fund.get("capex", 0))
+    # FCF 소스 1: QuickFS/yfinance 재무제표
     fcf          = fund.get("free_cash_flow", 0) or max(ocf - capex, 0)
-    # ── 금융주 FCF 폴백 ─────────────────────────────────────────────
-    # 은행·보험·증권사는 영업현금흐름 구조가 달라 yfinance/QuickFS의
-    # free_cash_flow 가 0 또는 음수로 잡히는 경우가 많음 (JPM 등).
-    # 이 경우 순이익(net_income)을 FCF 대리지표로 사용.
-    # 0.7 계수: 세후 순이익 중 주주귀속 현금 추정 (보수적 할인)
-    if not fcf and sector in ("Financials", "Financial Services") and net_income > 0:
-        fcf = net_income * 0.7
-        print(f"  {ticker_str}: 금융주 FCF 폴백 → 순이익×0.7 = {fcf/1e9:.2f}B")
-    # yfinance info에서도 freeCashflow 폴백 시도
+    # FCF 소스 2: yfinance info.freeCashflow
     if not fcf:
         fcf = safe(info.get("freeCashflow", 0))
+    # FCF 소스 3: 순이익 × 0.7 (은행 등 전통 FCF 미보고 업종, 또는 데이터 누락 시)
+    # JPM 같은 은행은 yfinance/QuickFS free_cash_flow = 0 으로 잡히는 경우가 많음
     if not fcf and net_income > 0:
-        fcf = net_income * 0.7   # 최후 폴백: 업종 무관 순이익 기반
+        fcf = net_income * 0.7
+        print(f"  {ticker_str}: FCF 폴백 → 순이익×0.7 = {fcf/1e9:.2f}B")
     total_debt   = fund.get("total_debt", 0)
     lt_debt      = fund.get("long_term_debt", 0)
     equity       = fund.get("total_equity", 0) or 1

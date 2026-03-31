@@ -66,19 +66,41 @@ except ImportError:
         print("  ERROR: pip install requests 를 먼저 실행하세요")
         sys.exit(1)
 
-# ── yfinance 전용 세션 (Render 등 클라우드에서 Yahoo Finance rate-limit 우회) ──
-# Yahoo Finance는 클라우드 IP에서 빈 User-Agent를 차단하는 경우가 많음
-_YF_SESSION = req.Session()
-_YF_SESSION.headers.update({
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    ),
-    "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
-    "Accept-Encoding": "gzip, deflate, br",
-})
+# ── yfinance 전용 세션 ─────────────────────────────────────────────
+# 문제: Yahoo Finance는 Render 등 클라우드 IP에서 TLS 지문(fingerprint)으로
+#       서버 요청을 탐지해 차단함. User-Agent 변경만으로는 부족함.
+# 해결: curl_cffi 로 실제 Chrome 브라우저의 TLS 핸드셰이크를 위조 → 클라우드 차단 우회
+_YF_SESSION = None
+_YF_CURL_OK = False
+try:
+    from curl_cffi.requests import Session as _CurlSession
+    _YF_SESSION = _CurlSession(impersonate="chrome120")
+    _YF_CURL_OK = True
+    print("  curl_cffi session OK (Chrome TLS impersonation)")
+except ImportError:
+    try:
+        print("  curl_cffi 설치 중...")
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "curl-cffi", "--quiet"],
+            timeout=120
+        )
+        from curl_cffi.requests import Session as _CurlSession
+        _YF_SESSION = _CurlSession(impersonate="chrome120")
+        _YF_CURL_OK = True
+        print("  curl_cffi installed OK")
+    except Exception as _curl_err:
+        print(f"  curl_cffi 설치 실패 ({_curl_err}), requests 폴백 사용")
+        _YF_SESSION = req.Session()
+        _YF_SESSION.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0.0.0 Safari/537.36"
+            ),
+            "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Accept-Encoding": "gzip, deflate, br",
+        })
 
 # ── In-memory cache (서버 실행 중 유지) ───────────────────────────
 _cache      = {}
@@ -207,81 +229,123 @@ def build_quotesummary(ticker_str, qfs_key=None):
     _yf_bundle = _cget(yf_ck)
     if _yf_bundle is None:
         _yf_bundle = {"info": {}, "price": 0.0, "shares": 0.0, "mktcap": 0.0}
-        try:
-            _t = yf.Ticker(ticker_str, session=_YF_SESSION)
-            # fast_info 먼저 (빠르고 신뢰성 높음)
+
+        # ── yfinance fetch: 최대 2회 재시도 (클라우드 cold-start 대응) ──
+        for _attempt in range(2):
             try:
-                fi = _t.fast_info
-                # last_price: 실시간 가격 (장중) — None 반환 시 previous_close 폴백
-                _lp = (getattr(fi, "last_price",  None) or
-                       getattr(fi, "lastPrice",   None))
-                # previous_close: 전일 종가 — JPM 등 일부 종목에서 last_price 실패 시 사용
-                _pc = (getattr(fi, "regular_market_previous_close", None) or
-                       getattr(fi, "regularMarketPreviousClose",    None) or
-                       getattr(fi, "previous_close",                None) or
-                       getattr(fi, "previousClose",                 None))
-                _yf_bundle["price"]  = float(_lp or _pc or 0.0)
-                _yf_bundle["shares"] = float(getattr(fi, "shares",      None) or
-                                             getattr(fi, "sharesOutstanding", None) or 0.0)
-                _yf_bundle["mktcap"] = float(getattr(fi, "market_cap",  None) or
-                                             getattr(fi, "marketCap",   None) or 0.0)
-                if not _yf_bundle["price"]:
-                    print(f"  {ticker_str}: fast_info 가격 없음 (last={_lp}, prev={_pc})")
-            except Exception as _fi_err:
-                print(f"  {ticker_str}: fast_info 오류: {_fi_err}")
-            # info dict (메타 정보 — 섹터, 이름 등)
-            try:
-                _yf_bundle["info"] = _t.info or {}
-            except Exception:
-                pass
-            # price 폴백 1: info 필드
-            if not _yf_bundle["price"]:
-                _yf_bundle["price"] = safe(
-                    _yf_bundle["info"].get("regularMarketPrice") or
-                    _yf_bundle["info"].get("currentPrice") or
-                    _yf_bundle["info"].get("previousClose"))
-            # price 폴백 2: history (1d → 5d 순서로 시도)
-            if not _yf_bundle["price"]:
-                for _period in ("1d", "5d"):
-                    try:
-                        hist = _t.history(period=_period)
-                        if not hist.empty:
-                            _yf_bundle["price"] = float(hist["Close"].dropna().iloc[-1])
-                            print(f"  {ticker_str}: history({_period}) 가격 사용 = {_yf_bundle['price']:.2f}")
-                            break
-                    except Exception:
-                        pass
-            # price 폴백 3: yf.download (다른 API 엔드포인트 — 클라우드 rate-limit 우회에 효과적)
-            if not _yf_bundle["price"]:
+                _t = yf.Ticker(ticker_str, session=_YF_SESSION)
+                # fast_info 먼저 (빠르고 신뢰성 높음)
                 try:
-                    _dl = yf.download(
-                        ticker_str, period="5d", progress=False,
-                        auto_adjust=True, actions=False
-                    )
-                    if not _dl.empty and "Close" in _dl.columns:
-                        _last = _dl["Close"].dropna().iloc[-1]
+                    fi = _t.fast_info
+                    _lp = (getattr(fi, "last_price",  None) or
+                           getattr(fi, "lastPrice",   None))
+                    _pc = (getattr(fi, "regular_market_previous_close", None) or
+                           getattr(fi, "regularMarketPreviousClose",    None) or
+                           getattr(fi, "previous_close",                None) or
+                           getattr(fi, "previousClose",                 None))
+                    _yf_bundle["price"]  = float(_lp or _pc or 0.0)
+                    _yf_bundle["shares"] = float(getattr(fi, "shares",      None) or
+                                                 getattr(fi, "sharesOutstanding", None) or 0.0)
+                    _yf_bundle["mktcap"] = float(getattr(fi, "market_cap",  None) or
+                                                 getattr(fi, "marketCap",   None) or 0.0)
+                    if not _yf_bundle["price"]:
+                        print(f"  {ticker_str}: fast_info 가격 없음 (last={_lp}, prev={_pc})")
+                except Exception as _fi_err:
+                    print(f"  {ticker_str}: fast_info 오류: {_fi_err}")
+                # info dict
+                try:
+                    _yf_bundle["info"] = _t.info or {}
+                except Exception:
+                    pass
+                # price 폴백 1: info 필드
+                if not _yf_bundle["price"]:
+                    _yf_bundle["price"] = safe(
+                        _yf_bundle["info"].get("regularMarketPrice") or
+                        _yf_bundle["info"].get("currentPrice") or
+                        _yf_bundle["info"].get("previousClose"))
+                # price 폴백 2: history (1d → 5d)
+                if not _yf_bundle["price"]:
+                    for _period in ("1d", "5d"):
+                        try:
+                            hist = _t.history(period=_period)
+                            if not hist.empty:
+                                _yf_bundle["price"] = float(hist["Close"].dropna().iloc[-1])
+                                print(f"  {ticker_str}: history({_period}) 가격 사용 = {_yf_bundle['price']:.2f}")
+                                break
+                        except Exception:
+                            pass
+                # 가격 취득 성공 시 재시도 루프 탈출
+                if _yf_bundle["price"] > 0:
+                    break
+                # 첫 번째 시도 실패 시 0.8초 대기 후 재시도
+                if _attempt == 0:
+                    print(f"  {ticker_str}: 1차 가격 fetch 실패, 재시도...")
+                    time.sleep(0.8)
+            except Exception as e:
+                print(f"  {ticker_str} yfinance 오류 (시도 {_attempt+1}): {e}")
+                if _attempt == 0:
+                    time.sleep(0.8)
+
+        # price 폴백 3: yf.download (다른 엔드포인트)
+        if not _yf_bundle["price"]:
+            try:
+                _dl = yf.download(ticker_str, period="5d", progress=False,
+                                  auto_adjust=True, actions=False)
+                if not _dl.empty:
+                    # yfinance 0.2.44+: MultiIndex 컬럼 대응
+                    _close = None
+                    if "Close" in _dl.columns:
+                        _close = _dl["Close"]
+                    elif hasattr(_dl.columns, "levels") and ("Close", ticker_str) in _dl.columns:
+                        _close = _dl[("Close", ticker_str)]
+                    if _close is not None:
+                        _last = _close.dropna().iloc[-1]
                         if _last > 0:
                             _yf_bundle["price"] = float(_last)
                             print(f"  {ticker_str}: yf.download 가격 사용 = {_yf_bundle['price']:.2f}")
-                except Exception as _dl_err:
-                    print(f"  {ticker_str}: yf.download 오류: {_dl_err}")
-            # shares 폴백: info 필드 여러 개 시도
-            if not _yf_bundle["shares"]:
-                for _sk in ["sharesOutstanding", "impliedSharesOutstanding", "floatShares"]:
-                    v = safe(_yf_bundle["info"].get(_sk))
-                    if v and v > 1e6:
-                        _yf_bundle["shares"] = v
+            except Exception as _dl_err:
+                print(f"  {ticker_str}: yf.download 오류: {_dl_err}")
+
+        # price 폴백 4: Yahoo Finance v8 Chart API 직접 호출
+        # yfinance의 cookie/crumb 인증을 완전히 우회하는 별도 엔드포인트
+        if not _yf_bundle["price"]:
+            for _yf_host in ("query1.finance.yahoo.com", "query2.finance.yahoo.com"):
+                try:
+                    _url = (f"https://{_yf_host}/v8/finance/chart/{ticker_str}"
+                            f"?interval=1d&range=2d&includePrePost=false")
+                    _r = _YF_SESSION.get(_url, timeout=10)
+                    _j = _r.json()
+                    _meta = _j["chart"]["result"][0]["meta"]
+                    _p = float(
+                        _meta.get("regularMarketPrice") or
+                        _meta.get("previousClose") or 0
+                    )
+                    if _p > 0:
+                        _yf_bundle["price"] = _p
+                        # mktcap/shares도 여기서 보완
+                        if not _yf_bundle["mktcap"]:
+                            _yf_bundle["mktcap"] = float(_meta.get("marketCap") or 0)
+                        print(f"  {ticker_str}: v8 Chart API 가격 사용 = {_p:.2f}")
                         break
-            # shares 최종 폴백: 시총 / 가격 추정
-            if (not _yf_bundle["shares"] or _yf_bundle["shares"] < 1e6) and \
-               _yf_bundle["mktcap"] > 0 and _yf_bundle["price"] > 0:
-                _yf_bundle["shares"] = _yf_bundle["mktcap"] / _yf_bundle["price"]
-                print(f"  {ticker_str}: 주식수 추정(시총÷가격) = {_yf_bundle['shares']/1e9:.2f}B")
-            # mktcap 폴백
-            if not _yf_bundle["mktcap"]:
-                _yf_bundle["mktcap"] = safe(_yf_bundle["info"].get("marketCap"))
-        except Exception as e:
-            print(f"  {ticker_str} yfinance 오류: {e}")
+                except Exception as _v8_err:
+                    print(f"  {ticker_str}: v8 API ({_yf_host}) 오류: {_v8_err}")
+
+        # shares 폴백
+        if not _yf_bundle["shares"]:
+            for _sk in ["sharesOutstanding", "impliedSharesOutstanding", "floatShares"]:
+                _sv = safe(_yf_bundle["info"].get(_sk))
+                if _sv and _sv > 1e6:
+                    _yf_bundle["shares"] = _sv
+                    break
+        # shares 최종 폴백: 시총 / 가격
+        if (not _yf_bundle["shares"] or _yf_bundle["shares"] < 1e6) and \
+           _yf_bundle["mktcap"] > 0 and _yf_bundle["price"] > 0:
+            _yf_bundle["shares"] = _yf_bundle["mktcap"] / _yf_bundle["price"]
+            print(f"  {ticker_str}: 주식수 추정(시총÷가격) = {_yf_bundle['shares']/1e9:.2f}B")
+        # mktcap 폴백
+        if not _yf_bundle["mktcap"]:
+            _yf_bundle["mktcap"] = safe(_yf_bundle["info"].get("marketCap"))
+
         _cset(yf_ck, _yf_bundle, PRICE_TTL)
 
     info       = _yf_bundle["info"]
@@ -406,6 +470,19 @@ def build_quotesummary(ticker_str, qfs_key=None):
     ocf          = fund.get("operating_cash_flow", 0)
     capex        = abs(fund.get("capex", 0))
     fcf          = fund.get("free_cash_flow", 0) or max(ocf - capex, 0)
+    # ── 금융주 FCF 폴백 ─────────────────────────────────────────────
+    # 은행·보험·증권사는 영업현금흐름 구조가 달라 yfinance/QuickFS의
+    # free_cash_flow 가 0 또는 음수로 잡히는 경우가 많음 (JPM 등).
+    # 이 경우 순이익(net_income)을 FCF 대리지표로 사용.
+    # 0.7 계수: 세후 순이익 중 주주귀속 현금 추정 (보수적 할인)
+    if not fcf and sector in ("Financials", "Financial Services") and net_income > 0:
+        fcf = net_income * 0.7
+        print(f"  {ticker_str}: 금융주 FCF 폴백 → 순이익×0.7 = {fcf/1e9:.2f}B")
+    # yfinance info에서도 freeCashflow 폴백 시도
+    if not fcf:
+        fcf = safe(info.get("freeCashflow", 0))
+    if not fcf and net_income > 0:
+        fcf = net_income * 0.7   # 최후 폴백: 업종 무관 순이익 기반
     total_debt   = fund.get("total_debt", 0)
     lt_debt      = fund.get("long_term_debt", 0)
     equity       = fund.get("total_equity", 0) or 1

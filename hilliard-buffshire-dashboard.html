@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+h<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
@@ -956,7 +956,7 @@ const scoreQuant = s => {
     details
   };
 };
-const computeComposite = (val, qual, quant) => Math.round(val.total * 0.35 + qual.total * 0.25 + quant.total * 0.40);
+const computeComposite = (val, qual, quant) => Math.round(val.total * 0.50 + qual.total * 0.30 + quant.total * 0.20);
 const calcFcfPerShare = s => s.fcfPerShare || parseFloat((s.price * s.fcfYield / 100).toFixed(2));
 
 // ── S&P 500 UNIVERSE (for market scan) ───────────────────────

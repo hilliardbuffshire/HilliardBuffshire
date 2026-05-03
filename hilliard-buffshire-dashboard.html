@@ -740,7 +740,7 @@ const UNIVERSE = [
 ];
 
 // ── UNIVERSE SCREENER COMPONENT ───────────────────────────────
-const UniverseScreener = ({ L, initialSig, onAddStock, watchlistTickers = [] }) => {
+const UniverseScreener = ({ L, initialSig, onAddStock, onRemoveStock, watchlistTickers = [] }) => {
   const [scanState, setScanState] = useState("idle");
   const [scanResults, setScanResults] = useState([]);
   const [scanProgress, setScanProgress] = useState(0);
@@ -928,6 +928,85 @@ const UniverseScreener = ({ L, initialSig, onAddStock, watchlistTickers = [] }) 
       ),
       scanError && CE("div", { style: { marginTop: 10, padding: "10px 14px", borderRadius: 8, background: "#fee2e2", border: "1px solid #fca5a5", color: "#b91c1c", fontSize: 12, fontWeight: 600 } }, scanError)
     ),
+
+    /* ── IDLE HERO: shown before first scan ───────────────────────────── */
+    scanState === "idle" && scanResults.length === 0 && CE("div", { style: { marginBottom: 20 } },
+      /* Watchlist quick-stats row */
+      watchlistTickers.length > 0 && CE("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 20 } },
+        ...[
+          { label: L ? "워치리스트 종목 수" : "Watchlist Stocks",   value: watchlistTickers.length,           color: C.gold,         icon: "📋" },
+          { label: L ? "스캔 가능 종목 수" : "Scannable Universe",  value: UNIVERSE.length + " stocks",        color: C.navy,         icon: "🌐" },
+          { label: L ? "스캔 커버리지" : "S&P 500 Coverage",        value: Math.round(UNIVERSE.length/503*100) + "%", color: C.emerald, icon: "📊" },
+          { label: L ? "섹터 수" : "Sectors Covered",               value: "11 sectors",                       color: C.orange,       icon: "🏭" },
+        ].map(({ label, value, color, icon }) =>
+          CE(Card, { key: label, style: { padding: "16px 18px", borderLeft: "3px solid " + color } },
+            CE("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } },
+              CE("span", { style: { fontSize: 18 } }, icon),
+              CE("span", { style: { fontSize: 10, color: C.textDim, textTransform: "uppercase", letterSpacing: 0.8 } }, label)
+            ),
+            CE("div", { style: { fontSize: 24, fontWeight: 800, color } }, value)
+          )
+        )
+      ),
+
+      /* Feature explanation cards */
+      CE("div", { style: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 20 } },
+        ...[
+          {
+            icon: "🔍", color: C.navy,
+            title: L ? "종합 스코어링 시스템" : "Composite Scoring",
+            desc:  L ? "DCF 가치평가 · 재무 퀄리티 · 퀀트 모멘텀을 합산한 종합 점수로 S&P 500 전종목을 순위 매김"
+                     : "Scores every stock in the S&P 500 on valuation (DCF), quality (ROE/ROIC), and quant momentum — all in one composite.",
+            tags:  ["Val 50%", "Qual 30%", "Quant 20%"]
+          },
+          {
+            icon: "📈", color: C.emerald,
+            title: L ? "Buy 시그널 필터링" : "Buy Signal Filter",
+            desc:  L ? "Strong Buy / Buy 등급 종목만 빠르게 추려서 확인. 안전마진(MoS), P/E, D/E 필터로 세부 조건 설정 가능"
+                     : "Filter to Strong Buy or Buy-rated stocks instantly. Refine by Margin of Safety, P/E, D/E and sector.",
+            tags:  ["Strong Buy", "MoS > 20%", "P/E < 20x"]
+          },
+          {
+            icon: "⭐", color: C.gold,
+            title: L ? "워치리스트 즉시 추가" : "One-Click Watchlist",
+            desc:  L ? "마음에 드는 종목은 + 버튼 한 번으로 워치리스트에 추가. ✓ 버튼으로 제거도 가능"
+                     : "Hit + on any stock to add it to your watchlist instantly. Click ✓ again to remove.",
+            tags:  ["+ Add", "✓ Remove", "Auto-sync"]
+          }
+        ].map(({ icon, color, title, desc, tags }) =>
+          CE(Card, { key: title, style: { padding: 18, borderTop: "3px solid " + color } },
+            CE("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 10 } },
+              CE("span", { style: { fontSize: 22 } }, icon),
+              CE("span", { style: { fontWeight: 700, fontSize: 13, color } }, title)
+            ),
+            CE("p", { style: { fontSize: 11, color: C.textDim, lineHeight: 1.7, margin: "0 0 10px" } }, desc),
+            CE("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
+              tags.map(t => CE("span", { key: t, style: { padding: "2px 8px", borderRadius: 4, background: color + "18", color, fontSize: 10, fontWeight: 700, border: "1px solid " + color + "44" } }, t))
+            )
+          )
+        )
+      ),
+
+      /* Scan prompt banner */
+      CE("div", { style: { background: "linear-gradient(135deg,#1c2340 0%,#1a2a1a 100%)", borderRadius: 12, padding: "24px 32px",
+                           display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 16,
+                           border: "1px solid " + C.gold + "33" } },
+        CE("div", null,
+          CE("div", { style: { fontSize: 16, fontWeight: 800, color: C.goldLight, marginBottom: 6 } },
+            L ? "🚀 지금 스캔을 시작하세요" : "🚀 Ready to find your next investment?"),
+          CE("div", { style: { fontSize: 12, color: C.textDim, lineHeight: 1.6 } },
+            L ? `S&P 500 ${UNIVERSE.length}개 종목을 실시간 분석합니다. 약 3~5분 소요됩니다.`
+              : `Scan ${UNIVERSE.length} S&P 500 stocks in real-time. Takes about 3–5 minutes.`)
+        ),
+        CE("button", { onClick: startScan,
+                       style: { padding: "12px 32px", borderRadius: 10, border: "none",
+                                background: "linear-gradient(135deg," + C.gold + "," + C.goldBright + ")",
+                                color: "#fff", fontSize: 14, fontWeight: 800, cursor: "pointer", letterSpacing: 0.5,
+                                boxShadow: "0 4px 20px " + C.gold + "44" } },
+          L ? "▶ 전체 시장 스캔 시작" : "▶ Start Full Market Scan")
+      )
+    ),
+
     scanResults.length > 0 && CE("div", { style: { display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 10, marginBottom: 16 } },
       ...[
         [L ? "전체" : "Total", counts.total, C.navy],
@@ -999,7 +1078,13 @@ const UniverseScreener = ({ L, initialSig, onAddStock, watchlistTickers = [] }) 
                     s.tier.tier)),
                 CE("td", { style: { padding: "9px 8px", textAlign: "center" }, onClick: e => e.stopPropagation() },
                   inWatchlist
-                    ? CE("span", { title: L ? "워치리스트에 있음" : "Already in watchlist", style: { fontSize: 16, color: C.emerald } }, "✓")
+                    ? CE("button", {
+                        onClick: () => onRemoveStock && onRemoveStock(s.ticker),
+                        title: L ? "워치리스트에서 제거" : "Remove from watchlist",
+                        style: { width: 26, height: 26, borderRadius: "50%", border: "2px solid " + C.emerald, background: C.emerald + "22",
+                                 color: C.emerald, fontSize: 14, fontWeight: 900, cursor: "pointer", lineHeight: 1,
+                                 display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }
+                      }, "✓")
                     : CE("button", {
                         onClick: () => onAddStock && onAddStock(s),
                         title: L ? "워치리스트에 추가" : "Add to watchlist",
@@ -5269,7 +5354,7 @@ function Dashboard() {
     React.createElement("button", { onClick: () => { setScreenerMode("watchlist"); setTierFilter("All"); }, style: { padding: "7px 18px", borderRadius: 8, border: "1px solid " + (screenerMode === "watchlist" ? C.gold : C.gold + "66"), background: screenerMode === "watchlist" ? "linear-gradient(135deg," + C.gold + "," + C.goldBright + ")" : "transparent", color: screenerMode === "watchlist" ? "#fff" : C.gold, fontSize: 12, fontWeight: 700, cursor: "pointer" } }, L ? "📋 내 워치리스트" : "📋 My Watchlist"),
     React.createElement("span", { style: { fontSize: 11, color: C.textDim, marginLeft: 4 } }, screenerMode === "universe" ? (L ? "S&P 500 전체 종목 실시간 스캔 — + 버튼으로 워치리스트 추가" : "Scan S&P 500 live — click + to add to watchlist") : screenerMode === "buySignals" ? (L ? "Buffett+Ackman+Williams 통합 Buy 점수 — 시장 밸류에이션 포함" : "Combined Buffett+Ackman+Williams Buy score with market valuation") : (L ? "워치리스트 종목만 필터링" : "Filter your watchlist stocks"))
   ),
-  screenerMode === "universe" && React.createElement(UniverseScreener, { L, initialSig: tierFilter !== "All" ? tierFilter : null, key: "univ-" + tierFilter, onAddStock: addStockToList, watchlistTickers: stocks.map(s => s.ticker) }),
+  screenerMode === "universe" && React.createElement(UniverseScreener, { L, initialSig: tierFilter !== "All" ? tierFilter : null, key: "univ-" + tierFilter, onAddStock: addStockToList, onRemoveStock: removeStockFromList, watchlistTickers: stocks.map(s => s.ticker) }),
   screenerMode === "buySignals" && React.createElement(BuySignalsDashboard, { enriched, L }),
   screenerMode === "watchlist" && React.createElement(Card, { style: { marginBottom: 18, padding: 0, overflow: "hidden", border: "1px solid " + C.gold + "44" } },
     React.createElement("div", { style: { padding: "10px 16px", background: "linear-gradient(135deg,#1c1917,#292524)", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center" } },

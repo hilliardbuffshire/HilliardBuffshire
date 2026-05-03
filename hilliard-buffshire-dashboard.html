@@ -763,16 +763,32 @@ const UniverseScreener = ({ L, initialSig, onAddStock, onRemoveStock, watchlistT
     setScanError(null);
     cancelRef.current = false;
 
-    // server.py 연결 확인
-    try {
-      const probe = await apiFetch(`${PROXY}/yf?ticker=AAPL`, { signal: AbortSignal.timeout(4000) });
-      if (!probe.ok) throw new Error("not ready");
-    } catch(e) {
-      setScanState("idle");
-      setScanError(L ? "⚠️ server.py가 실행 중이지 않습니다. 터미널에서 'python server.py'를 먼저 실행하세요."
-                     : "⚠️ server.py is not running. Run 'python server.py' first.");
-      return;
+    // server.py 연결 확인 (Render 서버는 cold start 시 최대 60초 소요 → 재시도 포함)
+    const isRemote = typeof window !== "undefined" && !["localhost","127.0.0.1"].includes(window.location.hostname);
+    const probeTimeout = isRemote ? 45000 : 8000;   // Render: 45s, local: 8s
+    let probeOk = false;
+    for (let attempt = 1; attempt <= (isRemote ? 3 : 1); attempt++) {
+      try {
+        setScanProgress(0);
+        if (isRemote && attempt > 1) {
+          setScanError(L ? `⏳ 서버 웨이크업 중... (${attempt}/3회 시도)` : `⏳ Waking up server... (attempt ${attempt}/3)`);
+        }
+        const probe = await apiFetch(`${PROXY}/yf?ticker=AAPL`, { signal: AbortSignal.timeout(probeTimeout) });
+        if (probe.ok) { probeOk = true; setScanError(null); break; }
+      } catch(e) {
+        if (attempt === (isRemote ? 3 : 1)) {
+          setScanState("idle");
+          setScanError(isRemote
+            ? (L ? "⚠️ 서버 응답 없음. Render 서버가 시작 중일 수 있습니다. 30초 후 다시 시도해 주세요."
+                 : "⚠️ Server not responding. Render may be starting up — please try again in 30 seconds.")
+            : (L ? "⚠️ server.py가 실행 중이지 않습니다. 터미널에서 'python server.py'를 먼저 실행하세요."
+                 : "⚠️ server.py is not running. Run 'python server.py' first."));
+          return;
+        }
+        await new Promise(r => setTimeout(r, 5000));  // 5초 후 재시도
+      }
     }
+    if (!probeOk) return;
 
     let results = [];
     const BATCH_SIZE = 5;   // server.py 부하 분산
@@ -904,30 +920,39 @@ const UniverseScreener = ({ L, initialSig, onAddStock, onRemoveStock, watchlistT
   );
 
   return CE(React.Fragment, null,
-    CE(Card, { style: { marginBottom: 16, padding: 16 } },
-      CE("div", { style: { display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" } },
-        CE("div", { style: { flex: 1, minWidth: 200 } },
-          CE("div", { style: { fontWeight: 700, fontSize: 14, color: C.navy, marginBottom: 3 } },
-            L ? "전체 미국 시장 스캔 (Universe Scanner)" : "Full US Market Scanner (Universe)"),
-          CE("div", { style: { fontSize: 11, color: C.textDim } },
-            L ? `S&P 500 주요 종목 ${UNIVERSE.length}개 — 5개씩 배치로 실시간 스캔` : `${UNIVERSE.length} major S&P 500 stocks — real-time batch scan (5 at a time)`)
-        ),
-        scanState !== "scanning" ?
-          CE("button", { onClick: startScan, style: { padding: "8px 22px", borderRadius: 8, border: "none", background: "linear-gradient(135deg," + C.gold + "," + C.goldBright + ")", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", letterSpacing: 0.5 } },
-            scanResults.length > 0 ? (L ? "🔄 재스캔" : "🔄 Re-Scan") : (initialSig ? (L ? "▶ " + initialSig + " 신호 스캔 시작" : "▶ Scan for " + initialSig) : (L ? "▶ 스캔 시작" : "▶ Start Scan"))) :
-          CE("button", { onClick: stopScan, style: { padding: "8px 22px", borderRadius: 8, border: "none", background: C.crimson, color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" } },
-            L ? "■ 중지" : "■ Stop"),
-        scanState === "scanning" && CE("div", { style: { minWidth: 170 } },
-          CE("div", { style: { fontSize: 11, color: C.textDim, marginBottom: 4 } }, `${scanProgress} / ${UNIVERSE.length}  (${pct}%)`),
-          CE("div", { style: { height: 7, background: C.border, borderRadius: 4, overflow: "hidden" } },
+    CE("div", { style: { background: "linear-gradient(135deg,#1c2340 0%,#1a2a1a 100%)", borderRadius: 12, padding: "20px 28px",
+                         marginBottom: 16, border: "1px solid " + C.gold + "33",
+                         display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 16 } },
+      CE("div", { style: { flex: 1, minWidth: 220 } },
+        CE("div", { style: { fontWeight: 800, fontSize: 17, color: C.goldLight, marginBottom: 5, letterSpacing: 0.3 } },
+          L ? "🌐 전체 미국 시장 스캔 (Universe Scanner)" : "🌐 Full US Market Scanner"),
+        CE("div", { style: { fontSize: 12, color: C.textDim, lineHeight: 1.6 } },
+          L ? `S&P 500 ${UNIVERSE.length}개 종목 실시간 분석 — Val·Qual·Quant 종합 점수 + Buy 시그널 필터`
+            : `${UNIVERSE.length} S&P 500 stocks scored on Valuation, Quality & Momentum in real time`),
+        scanState === "scanning" && CE("div", { style: { marginTop: 10 } },
+          CE("div", { style: { fontSize: 11, color: C.gold, marginBottom: 5, fontWeight: 600 } },
+            `${scanProgress} / ${UNIVERSE.length}  (${pct}%)  ${L ? "스캔 중..." : "Scanning..."}`),
+          CE("div", { style: { height: 6, background: "#ffffff22", borderRadius: 4, overflow: "hidden", maxWidth: 300 } },
             CE("div", { style: { height: "100%", width: pct + "%", background: "linear-gradient(90deg," + C.gold + "," + C.goldBright + ")", transition: "width 0.5s ease", borderRadius: 4 } })
           )
         ),
-        scanState === "complete" && CE("span", { style: { fontSize: 12, color: C.emerald, fontWeight: 700 } },
-          `✓ ${L ? "완료" : "Complete"} — ${counts.total} ${L ? "종목 스캔됨" : "stocks scanned"}`)
+        scanState === "complete" && CE("div", { style: { marginTop: 8, fontSize: 12, color: C.emerald, fontWeight: 700 } },
+          `✓ ${L ? "스캔 완료" : "Scan complete"} — ${counts.strongBuy} Strong Buy · ${counts.buy} Buy / ${counts.total} ${L ? "종목" : "stocks"}`)
       ),
-      scanError && CE("div", { style: { marginTop: 10, padding: "10px 14px", borderRadius: 8, background: "#fee2e2", border: "1px solid #fca5a5", color: "#b91c1c", fontSize: 12, fontWeight: 600 } }, scanError)
+      CE("div", { style: { display: "flex", gap: 10, alignItems: "center" } },
+        scanState === "scanning"
+          ? CE("button", { onClick: stopScan, style: { padding: "10px 24px", borderRadius: 9, border: "none", background: C.crimson, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" } },
+              L ? "■ 중지" : "■ Stop")
+          : CE("button", { onClick: startScan, style: { padding: "12px 30px", borderRadius: 9, border: "none",
+                           background: "linear-gradient(135deg," + C.gold + "," + C.goldBright + ")",
+                           color: "#fff", fontSize: 13, fontWeight: 800, cursor: "pointer", letterSpacing: 0.5,
+                           boxShadow: "0 4px 16px " + C.gold + "55" } },
+              scanResults.length > 0 ? (L ? "🔄 재스캔" : "🔄 Re-Scan")
+                : (initialSig ? (L ? "▶ " + initialSig + " 스캔" : "▶ Scan " + initialSig)
+                              : (L ? "▶ 스캔 시작" : "▶ Start Scan")))
+      )
     ),
+      scanError && CE("div", { style: { marginTop: 10, padding: "10px 14px", borderRadius: 8, background: "#fee2e2", border: "1px solid #fca5a5", color: "#b91c1c", fontSize: 12, fontWeight: 600 } }, scanError),
 
     /* ── IDLE HERO: shown before first scan ───────────────────────────── */
     scanState === "idle" && scanResults.length === 0 && CE("div", { style: { marginBottom: 20 } },
@@ -987,23 +1012,10 @@ const UniverseScreener = ({ L, initialSig, onAddStock, onRemoveStock, watchlistT
         )
       ),
 
-      /* Scan prompt banner */
-      CE("div", { style: { background: "linear-gradient(135deg,#1c2340 0%,#1a2a1a 100%)", borderRadius: 12, padding: "24px 32px",
-                           display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 16,
-                           border: "1px solid " + C.gold + "33" } },
-        CE("div", null,
-          CE("div", { style: { fontSize: 16, fontWeight: 800, color: C.goldLight, marginBottom: 6 } },
-            L ? "🚀 지금 스캔을 시작하세요" : "🚀 Ready to find your next investment?"),
-          CE("div", { style: { fontSize: 12, color: C.textDim, lineHeight: 1.6 } },
-            L ? `S&P 500 ${UNIVERSE.length}개 종목을 실시간 분석합니다. 약 3~5분 소요됩니다.`
-              : `Scan ${UNIVERSE.length} S&P 500 stocks in real-time. Takes about 3–5 minutes.`)
-        ),
-        CE("button", { onClick: startScan,
-                       style: { padding: "12px 32px", borderRadius: 10, border: "none",
-                                background: "linear-gradient(135deg," + C.gold + "," + C.goldBright + ")",
-                                color: "#fff", fontSize: 14, fontWeight: 800, cursor: "pointer", letterSpacing: 0.5,
-                                boxShadow: "0 4px 20px " + C.gold + "44" } },
-          L ? "▶ 전체 시장 스캔 시작" : "▶ Start Full Market Scan")
+      /* tip footer */
+      CE("div", { style: { textAlign: "center", fontSize: 11, color: C.textDim, paddingTop: 4 } },
+        L ? "💡 스캔 후 + 버튼으로 마음에 드는 종목을 바로 워치리스트에 추가하세요"
+          : "💡 After scanning, hit + on any stock to add it straight to your watchlist"
       )
     ),
 

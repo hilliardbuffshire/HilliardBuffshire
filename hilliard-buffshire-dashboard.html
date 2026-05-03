@@ -740,7 +740,7 @@ const UNIVERSE = [
 ];
 
 // ── UNIVERSE SCREENER COMPONENT ───────────────────────────────
-const UniverseScreener = ({ L, initialSig }) => {
+const UniverseScreener = ({ L, initialSig, onAddStock, watchlistTickers = [] }) => {
   const [scanState, setScanState] = useState("idle");
   const [scanResults, setScanResults] = useState([]);
   const [scanProgress, setScanProgress] = useState(0);
@@ -953,19 +953,19 @@ const UniverseScreener = ({ L, initialSig }) => {
           filtered.length + (L ? " 결과" : " results"))
       )
     ),
-    scanResults.length > 0 && CE(Card, { style: { padding: 0, overflow: "auto", maxHeight: 580 } },
+    scanResults.length > 0 && CE(Card, { style: { padding: 0, overflow: "auto", maxHeight: 620 } },
       CE("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12 } },
         CE("thead", null,
           CE("tr", { style: { borderBottom: "2px solid " + C.border, background: C.goldBg, position: "sticky", top: 0, zIndex: 2 } },
-            ...["#", "Ticker", L ? "섹터" : "Sector", L ? "시가총액" : "Mkt Cap", L ? "현재가" : "Price",
+            ...["#", L ? "티커 / 회사명" : "Ticker / Company", L ? "섹터" : "Sector", L ? "시가총액" : "Mkt Cap", L ? "현재가" : "Price",
               L ? "적정가(DCF)" : "Fair Val", L ? "안전마진" : "MoS%", "P/E", "D/E",
-              L ? "종합점수" : "Score", L ? "신호" : "Signal"
+              L ? "종합점수" : "Score", L ? "신호" : "Signal", L ? "추가" : "Add"
             ].map((h, idx) => CE("td", { key: idx, style: { padding: "9px 8px", fontWeight: 700, fontSize: 10, color: C.textMid, textTransform: "uppercase", whiteSpace: "nowrap", letterSpacing: 0.5 } }, h))
           )
         ),
         CE("tbody", null,
           filtered.length === 0 ?
-            CE("tr", null, CE("td", { colSpan: 11, style: { padding: 32, textAlign: "center", color: C.textDim, fontSize: 13 } },
+            CE("tr", null, CE("td", { colSpan: 12, style: { padding: 32, textAlign: "center", color: C.textDim, fontSize: 13 } },
               scanState === "idle" ? (L ? "▶ 스캔 시작 버튼을 눌러주세요." : "▶ Press Start Scan to begin scanning.") :
               (L ? "현재 필터 조건에 맞는 종목이 없습니다." : "No stocks match the current filters."))) :
             filtered.map((s, i) => {
@@ -973,6 +973,7 @@ const UniverseScreener = ({ L, initialSig }) => {
               const mcStr = mc >= 1e12 ? "$" + (mc / 1e12).toFixed(1) + "T" : mc >= 1e9 ? "$" + (mc / 1e9).toFixed(0) + "B" : mc > 0 ? "$" + (mc / 1e6).toFixed(0) + "M" : "—";
               const mosNum = parseFloat(s.mos);
               const mosColor = mosNum >= 20 ? C.emerald : mosNum >= 0 ? C.orange : C.crimson;
+              const inWatchlist = watchlistTickers.includes(s.ticker);
               return CE("tr", {
                 key: s.ticker,
                 onClick: () => setUSelected(s),
@@ -981,7 +982,10 @@ const UniverseScreener = ({ L, initialSig }) => {
                 onMouseLeave: e => e.currentTarget.style.background = "transparent"
               },
                 CE("td", { style: { padding: "9px 8px", color: C.textDim, fontSize: 11 } }, i + 1),
-                CE("td", { style: { padding: "9px 8px", fontWeight: 700, color: C.navy } }, s.ticker),
+                CE("td", { style: { padding: "9px 8px", minWidth: 130 } },
+                  CE("div", { style: { fontWeight: 700, color: C.navy, fontSize: 13 } }, s.ticker),
+                  CE("div", { style: { fontSize: 10, color: C.textMuted, marginTop: 2, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, s.name || "")
+                ),
                 CE("td", { style: { padding: "9px 8px", fontSize: 11, color: C.textMuted } }, s.sector || "—"),
                 CE("td", { style: { padding: "9px 8px", fontSize: 11, color: C.textDim } }, mcStr),
                 CE("td", { style: { padding: "9px 8px", fontWeight: 600 } }, s.price > 0 ? "$" + s.price.toFixed(2) : "—"),
@@ -992,7 +996,18 @@ const UniverseScreener = ({ L, initialSig }) => {
                 CE("td", { style: { padding: "9px 8px", fontWeight: 800, color: s.tier.color, fontSize: 14 } }, s.composite),
                 CE("td", { style: { padding: "9px 8px" } },
                   CE("span", { style: { padding: "3px 9px", borderRadius: 5, background: s.tier.color + "20", color: s.tier.color, fontSize: 10, fontWeight: 700, whiteSpace: "nowrap" } },
-                    s.tier.tier))
+                    s.tier.tier)),
+                CE("td", { style: { padding: "9px 8px", textAlign: "center" }, onClick: e => e.stopPropagation() },
+                  inWatchlist
+                    ? CE("span", { title: L ? "워치리스트에 있음" : "Already in watchlist", style: { fontSize: 16, color: C.emerald } }, "✓")
+                    : CE("button", {
+                        onClick: () => onAddStock && onAddStock(s),
+                        title: L ? "워치리스트에 추가" : "Add to watchlist",
+                        style: { width: 26, height: 26, borderRadius: "50%", border: "2px solid " + C.gold, background: "transparent",
+                                 color: C.gold, fontSize: 16, fontWeight: 700, cursor: "pointer", lineHeight: 1,
+                                 display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }
+                      }, "+")
+                )
               );
             })
         )
@@ -4791,7 +4806,7 @@ function Dashboard() {
   const [lastRefresh, setLastRefresh] = useState(null);
   const [apiMsg, setApiMsg] = useState("");
   const [editMode, setEditMode] = useState(false);
-  const [screenerMode, setScreenerMode] = useState("watchlist");
+  const [screenerMode, setScreenerMode] = useState("universe");
   const [signalChanges, setSignalChanges] = useState(() => {
     try { return JSON.parse(localStorage.getItem("hb-signal-changes") || "[]"); } catch(e) { return []; }
   });
@@ -5249,12 +5264,12 @@ function Dashboard() {
     onAddStock: addStockToList
   }), tab === "market" && /*#__PURE__*/React.createElement(MarketOverview, { enriched, L }), tab === "screener" && React.createElement(React.Fragment, null,
   React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 18, alignItems: "center", flexWrap: "wrap" } },
-    React.createElement("button", { onClick: () => { setScreenerMode("watchlist"); setTierFilter("All"); }, style: { padding: "7px 18px", borderRadius: 8, border: "1px solid " + (screenerMode === "watchlist" ? C.gold : C.gold + "66"), background: screenerMode === "watchlist" ? "linear-gradient(135deg," + C.gold + "," + C.goldBright + ")" : "transparent", color: screenerMode === "watchlist" ? "#fff" : C.gold, fontSize: 12, fontWeight: 700, cursor: "pointer" } }, L ? "📋 내 워치리스트" : "📋 My Watchlist"),
     React.createElement("button", { onClick: () => setScreenerMode("universe"), style: { padding: "7px 18px", borderRadius: 8, border: "1px solid " + (screenerMode === "universe" ? C.navy : C.navy + "55"), background: screenerMode === "universe" ? "linear-gradient(135deg," + C.navy + "," + C.slate + ")" : "transparent", color: screenerMode === "universe" ? "#fff" : C.navy, fontSize: 12, fontWeight: 700, cursor: "pointer" } }, L ? "🌐 전체 시장 스캔" : "🌐 Market Universe"),
     React.createElement("button", { onClick: () => setScreenerMode("buySignals"), style: { padding: "7px 18px", borderRadius: 8, border: "1px solid " + (screenerMode === "buySignals" ? C.emerald : C.emerald + "55"), background: screenerMode === "buySignals" ? "linear-gradient(135deg," + C.emerald + ",#15803d)" : "transparent", color: screenerMode === "buySignals" ? "#fff" : C.emerald, fontSize: 12, fontWeight: 700, cursor: "pointer" } }, L ? "🎯 Buy 신호 대시보드" : "🎯 Buy Signals"),
-    React.createElement("span", { style: { fontSize: 11, color: C.textDim, marginLeft: 4 } }, screenerMode === "watchlist" ? (L ? "워치리스트 종목만 필터링" : "Filter your watchlist stocks") : screenerMode === "universe" ? (L ? "S&P 500 전체 종목 실시간 스캔 (Graham 기준 포함)" : "Scan the full S&P 500 live — with Graham criteria filters") : (L ? "Buffett+Ackman+Williams 통합 Buy 점수 — 시장 밸류에이션 포함" : "Combined Buffett+Ackman+Williams Buy score with market valuation"))
+    React.createElement("button", { onClick: () => { setScreenerMode("watchlist"); setTierFilter("All"); }, style: { padding: "7px 18px", borderRadius: 8, border: "1px solid " + (screenerMode === "watchlist" ? C.gold : C.gold + "66"), background: screenerMode === "watchlist" ? "linear-gradient(135deg," + C.gold + "," + C.goldBright + ")" : "transparent", color: screenerMode === "watchlist" ? "#fff" : C.gold, fontSize: 12, fontWeight: 700, cursor: "pointer" } }, L ? "📋 내 워치리스트" : "📋 My Watchlist"),
+    React.createElement("span", { style: { fontSize: 11, color: C.textDim, marginLeft: 4 } }, screenerMode === "universe" ? (L ? "S&P 500 전체 종목 실시간 스캔 — + 버튼으로 워치리스트 추가" : "Scan S&P 500 live — click + to add to watchlist") : screenerMode === "buySignals" ? (L ? "Buffett+Ackman+Williams 통합 Buy 점수 — 시장 밸류에이션 포함" : "Combined Buffett+Ackman+Williams Buy score with market valuation") : (L ? "워치리스트 종목만 필터링" : "Filter your watchlist stocks"))
   ),
-  screenerMode === "universe" && React.createElement(UniverseScreener, { L, initialSig: tierFilter !== "All" ? tierFilter : null, key: "univ-" + tierFilter }),
+  screenerMode === "universe" && React.createElement(UniverseScreener, { L, initialSig: tierFilter !== "All" ? tierFilter : null, key: "univ-" + tierFilter, onAddStock: addStockToList, watchlistTickers: stocks.map(s => s.ticker) }),
   screenerMode === "buySignals" && React.createElement(BuySignalsDashboard, { enriched, L }),
   screenerMode === "watchlist" && React.createElement(Card, { style: { marginBottom: 18, padding: 0, overflow: "hidden", border: "1px solid " + C.gold + "44" } },
     React.createElement("div", { style: { padding: "10px 16px", background: "linear-gradient(135deg,#1c1917,#292524)", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center" } },

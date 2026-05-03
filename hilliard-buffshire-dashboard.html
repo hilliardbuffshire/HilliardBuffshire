@@ -4355,7 +4355,7 @@ const MarketOverview = ({ enriched = [], L = false }) => {
   }, defaultSectors.map((s, i) => /*#__PURE__*/React.createElement(Cell, {
     key: i,
     fill: parseFloat(s.changesPercentage) >= 0 ? C.emerald : C.crimson
-  })))))))),
+  }))))))),
   React.createElement(Card, { style: { marginTop: 20, padding: 0, overflow: "hidden", border: "1px solid " + C.gold + "33" } },
     React.createElement("div", { style: { padding: "12px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center", background: C.goldBg } },
       React.createElement("h3", { style: { color: C.gold, fontSize: 14, fontWeight: 700, margin: 0 } },
@@ -4864,6 +4864,165 @@ const TickerSearch = ({
 };
 
 // ═══════════════════════════════════════════════════════════════
+// BUY SIGNALS DASHBOARD
+// ═══════════════════════════════════════════════════════════════
+const BuySignalsDashboard = ({ enriched = [], L }) => {
+  const CE = React.createElement;
+
+  const computeBuyScore = (s) => {
+    const bf = [s.roe >= 15, s.debtToEquity >= 0 && s.debtToEquity <= 0.5, s.ownerEarningsYield >= 5, s.grossMargin >= 40, s.fcfYield >= 3];
+    const bfPass = bf.filter(Boolean).length;
+    const bfScore = Math.round(bfPass / 5 * 100);
+    const ak = [s.roic >= 15, s.pFcf > 0 && s.pFcf <= 25, s.evEbit > 0 && s.evEbit <= 20];
+    const akPass = ak.filter(Boolean).length;
+    const akScore = Math.round(akPass / 3 * 100);
+    const qScore = s.quantScore ? s.quantScore.total : 0;
+    const mos = (s.dcfIntrinsic > 0 && s.price > 0) ? ((s.dcfIntrinsic - s.price) / s.dcfIntrinsic * 100) : null;
+    const combined = Math.round(bfScore * 0.40 + akScore * 0.25 + qScore * 0.35);
+    return { bfScore, bfPass, akScore, akPass, qScore, combined, mos };
+  };
+
+  const scores = React.useMemo(() => {
+    return enriched.map(s => ({ ...s, bs: computeBuyScore(s) })).sort((a, b) => b.bs.combined - a.bs.combined);
+  }, [enriched]);
+
+  const buyStocks = scores.filter(s => s.tier.tier === "Strong Buy" || s.tier.tier === "Buy");
+
+  const undervaluedCount = enriched.filter(s => s.mos && parseFloat(s.mos) > 0).length;
+  const avgMos = (() => {
+    const v = enriched.map(s => parseFloat(s.mos)).filter(n => isFinite(n));
+    return v.length ? (v.reduce((a, n) => a + n, 0) / v.length).toFixed(1) : null;
+  })();
+  const avgComposite = enriched.length ? Math.round(enriched.reduce((a, s) => a + s.composite, 0) / enriched.length) : 0;
+  const undervaluedPct = enriched.length ? Math.round(undervaluedCount / enriched.length * 100) : 0;
+  const mosParsed = parseFloat(avgMos);
+
+  const mktColor = undervaluedPct >= 60 ? C.emerald : undervaluedPct >= 40 ? C.orange : C.crimson;
+  const mktLabel = undervaluedPct >= 60
+    ? (L ? "저평가 우세 — 매수 기회" : "Undervalued Dominant — Buy Opportunity")
+    : undervaluedPct >= 40
+    ? (L ? "혼조세 — 선별 접근 필요" : "Mixed Market — Selective Approach")
+    : (L ? "고평가 우세 — 신중한 접근 필요" : "Overvalued Dominant — Proceed with Caution");
+
+  if (enriched.length === 0) return CE(Card, { style: { padding: 32, textAlign: "center" } },
+    CE("div", { style: { fontSize: 13, color: C.textDim } },
+      L ? "⚠️ 워치리스트 데이터 없음 — Screener에서 Refresh Stocks를 먼저 실행하세요." : "⚠️ No watchlist data — click Refresh Stocks in the Screener first."
+    )
+  );
+
+  return CE(React.Fragment, null,
+    CE(Card, { style: { marginBottom: 16, padding: 16, borderTop: "3px solid " + mktColor } },
+      CE("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } },
+        CE("div", null,
+          CE("h3", { style: { margin: 0, fontSize: 15, fontWeight: 700, color: C.gold } }, "🌡️ " + (L ? "시장 밸류에이션 현황" : "Market Valuation")),
+          CE("p", { style: { margin: "4px 0 0", fontSize: 12, color: mktColor, fontWeight: 700 } }, mktLabel)
+        ),
+        CE("div", { style: { textAlign: "right" } },
+          CE("div", { style: { fontSize: 28, fontWeight: 800, color: mktColor, lineHeight: 1 } }, undervaluedPct + "%"),
+          CE("div", { style: { fontSize: 10, color: C.textDim, marginTop: 2 } }, L ? "저평가 종목 비율" : "% Stocks Undervalued")
+        )
+      ),
+      CE("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10 } },
+        [
+          [L ? "저평가 종목" : "Undervalued", undervaluedCount + "/" + enriched.length, undervaluedPct >= 50 ? C.emerald : C.orange, L ? "MoS > 0% 종목 수" : "Stocks with MoS > 0%"],
+          [L ? "평균 안전마진" : "Avg Safety Margin", avgMos ? avgMos + "%" : "N/A", mosParsed > 20 ? C.emerald : mosParsed > 0 ? C.gold : C.crimson, mosParsed > 20 ? (L ? "충분한 안전마진" : "Sufficient MoS") : mosParsed > 0 ? (L ? "소폭 저평가" : "Slightly Undervalued") : (L ? "안전마진 부족" : "Insufficient MoS")],
+          [L ? "평균 Composite" : "Avg Composite", avgComposite, avgComposite >= 65 ? C.emerald : avgComposite >= 50 ? C.orange : C.crimson, avgComposite >= 65 ? "Strong Buy 권역" : avgComposite >= 50 ? "Neutral 권역" : "Watch/Sell 권역"],
+          [L ? "Buy Signal 종목" : "Buy Signals", buyStocks.length + "/" + enriched.length, buyStocks.length / enriched.length >= 0.3 ? C.emerald : C.orange, L ? "Buy+Strong Buy 합계" : "Buy + Strong Buy count"],
+        ].map(([lbl, val, col, sub]) =>
+          CE("div", { key: lbl, style: { background: col + "12", border: "1px solid " + col + "44", borderRadius: 8, padding: "10px 12px" } },
+            CE("div", { style: { fontSize: 18, fontWeight: 800, color: col } }, val),
+            CE("div", { style: { fontSize: 10, fontWeight: 600, color: C.textMid, marginTop: 3 } }, lbl),
+            CE("div", { style: { fontSize: 9, color: C.textDim, marginTop: 2 } }, sub)
+          )
+        )
+      )
+    ),
+    CE(Card, { style: { marginBottom: 16, padding: "10px 16px", border: "1px solid " + C.border } },
+      CE("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
+        CE("span", { style: { fontSize: 11, fontWeight: 700, color: C.textMid, marginRight: 4 } }, L ? "Buy Score 산정 방식:" : "Buy Score Formula:"),
+        [
+          ["🏛️ Buffett ×40%", C.gold, "ROE≥15% · D/E≤0.5 · Owner Earnings≥5% · Gross Margin≥40% · FCF Yield≥3%"],
+          ["💎 Ackman ×25%", C.cyan, "ROIC≥15% · P/FCF≤25x · EV/EBIT≤20x"],
+          ["📈 Larry Williams ×35%", C.emerald, "Williams %R · Accum/Dist · Momentum · COT Index · Sentiment · 6m Mom · Price Pattern"],
+        ].map(([lbl, col, tip]) =>
+          CE("span", { key: lbl, title: tip, style: { display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: col, fontWeight: 600, cursor: "help", padding: "3px 10px", borderRadius: 12, background: col + "18", border: "1px solid " + col + "35" } }, lbl)
+        )
+      )
+    ),
+    CE(Card, { style: { padding: 0, overflow: "hidden" } },
+      CE("div", { style: { padding: "10px 16px", background: "linear-gradient(135deg,#1c1917,#292524)", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid " + C.border } },
+        CE("span", { style: { color: C.gold, fontWeight: 700, fontSize: 14 } }, "🎯 " + (L ? "매수 신호 종목 순위" : "Buy Signal Rankings") + " (" + buyStocks.length + ")"),
+        CE("span", { style: { fontSize: 10, color: C.textDim } }, L ? "Buffett+Ackman+Williams 통합 점수 기준 정렬" : "Sorted by Buffett+Ackman+Williams combined score")
+      ),
+      buyStocks.length === 0
+        ? CE("div", { style: { padding: 24, textAlign: "center", color: C.textDim, fontSize: 12 } },
+            L ? "현재 Buy/Strong Buy 종목이 없습니다." : "No Buy or Strong Buy stocks in your watchlist currently."
+          )
+        : CE("div", { style: { overflowX: "auto" } },
+            CE("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12 } },
+              CE("thead", null,
+                CE("tr", { style: { background: C.cardHover, borderBottom: "2px solid " + C.border } },
+                  [
+                    { h: "Signal" },
+                    { h: "Ticker" },
+                    { h: "Sector" },
+                    { h: "🏛️ Buffett", tip: "5개 기준 (ROE·D/E·OEY·GM·FCF)" },
+                    { h: "💎 Ackman", tip: "3개 기준 (ROIC·P/FCF·EV/EBIT)" },
+                    { h: "📈 Williams", tip: "%R·A/D·모멘텀·COT·심리지표" },
+                    { h: "Buy Score", tip: "Buffett×40%+Ackman×25%+Williams×35%" },
+                    { h: "MoS%", tip: "DCF 내재가치 대비 안전마진" },
+                  ].map(({ h, tip }) =>
+                    CE(Th, { key: h, title: tip || "" }, h)
+                  )
+                )
+              ),
+              CE("tbody", null,
+                buyStocks.map((s, i) => {
+                  const b = s.bs;
+                  const bCol = b.combined >= 70 ? C.emerald : b.combined >= 50 ? C.gold : C.orange;
+                  return CE("tr", { key: s.ticker, style: { borderBottom: "1px solid " + C.borderLight, background: i % 2 === 0 ? "transparent" : C.bg } },
+                    CE("td", { style: { padding: "8px 10px", textAlign: "center", whiteSpace: "nowrap" } },
+                      CE(Badge, { color: s.tier.color }, s.tier.icon + " " + s.tier.tier)
+                    ),
+                    CE("td", { style: { padding: "8px 10px", fontWeight: 700, color: C.gold } }, s.ticker),
+                    CE("td", { style: { padding: "8px 10px", color: C.textMid, fontSize: 11 } }, s.sector),
+                    CE("td", { style: { padding: "8px 10px", textAlign: "center" } },
+                      CE("div", { style: { fontWeight: 700, fontSize: 13, color: b.bfScore >= 80 ? C.gold : b.bfScore >= 60 ? C.goldLight : C.textDim } }, b.bfScore + "%"),
+                      CE("div", { style: { fontSize: 9, color: C.textDim } }, b.bfPass + "/5 passed")
+                    ),
+                    CE("td", { style: { padding: "8px 10px", textAlign: "center" } },
+                      CE("div", { style: { fontWeight: 700, fontSize: 13, color: b.akScore >= 100 ? C.cyan : b.akScore >= 67 ? C.emeraldLight : C.textDim } }, b.akScore + "%"),
+                      CE("div", { style: { fontSize: 9, color: C.textDim } }, b.akPass + "/3 passed")
+                    ),
+                    CE("td", { style: { padding: "8px 10px", textAlign: "center" } },
+                      CE("div", { style: { fontWeight: 700, fontSize: 13, color: b.qScore >= 70 ? C.emerald : b.qScore >= 50 ? C.emeraldLight : C.textDim } }, b.qScore),
+                      CE("div", { style: { width: 44, height: 4, background: C.border, borderRadius: 2, margin: "3px auto 0" } },
+                        CE("div", { style: { width: Math.min(b.qScore, 100) + "%", height: "100%", background: C.emerald, borderRadius: 2 } })
+                      )
+                    ),
+                    CE("td", { style: { padding: "8px 10px", textAlign: "center" } },
+                      CE("div", { style: { display: "flex", alignItems: "center", gap: 6, justifyContent: "center" } },
+                        CE("span", { style: { fontWeight: 800, fontSize: 17, color: bCol } }, b.combined),
+                        CE("div", { style: { width: 44, height: 6, background: C.border, borderRadius: 3, flexShrink: 0 } },
+                          CE("div", { style: { width: Math.min(b.combined, 100) + "%", height: "100%", background: bCol, borderRadius: 3 } })
+                        )
+                      )
+                    ),
+                    CE("td", { style: { padding: "8px 10px", textAlign: "center" } },
+                      b.mos !== null
+                        ? CE("span", { style: { fontWeight: 700, color: b.mos >= 30 ? C.emerald : b.mos >= 0 ? C.gold : C.crimson } }, (b.mos >= 0 ? "+" : "") + b.mos.toFixed(1) + "%")
+                        : CE("span", { style: { color: C.textDim } }, "—")
+                    )
+                  );
+                })
+              )
+            )
+          )
+    )
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════
 // MAIN DASHBOARD
 // ═══════════════════════════════════════════════════════════════
 function Dashboard() {
@@ -5145,10 +5304,10 @@ function Dashboard() {
       padding: "18px 32px",
       display: "flex",
       justifyContent: "space-between",
-      alignItems: "flex-start",
+      alignItems: "center",
       borderBottom: "3px solid " + C.gold
     }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h1", {
+  }, React.createElement("span", { style: { fontSize: 52, color: C.gold, lineHeight: 1, textShadow: "0 0 20px " + C.gold + "80", userSelect: "none", flexShrink: 0 } }, "✝"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h1", {
     style: {
       margin: 0,
       fontSize: 24,
@@ -5372,7 +5531,7 @@ function Dashboard() {
       maxWidth: 400,
       textAlign: "right"
     }
-  }, apiMsg)))), /*#__PURE__*/React.createElement("div", {
+  }, apiMsg)), React.createElement("span", { style: { fontSize: 52, color: C.gold, lineHeight: 1, textShadow: "0 0 20px " + C.gold + "80", userSelect: "none", flexShrink: 0 } }, "✝"))), /*#__PURE__*/React.createElement("div", {
     style: {
       padding: 28
     }
@@ -5384,9 +5543,11 @@ function Dashboard() {
   React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 18, alignItems: "center", flexWrap: "wrap" } },
     React.createElement("button", { onClick: () => { setScreenerMode("watchlist"); setTierFilter("All"); }, style: { padding: "7px 18px", borderRadius: 8, border: "1px solid " + (screenerMode === "watchlist" ? C.gold : C.gold + "66"), background: screenerMode === "watchlist" ? "linear-gradient(135deg," + C.gold + "," + C.goldBright + ")" : "transparent", color: screenerMode === "watchlist" ? "#fff" : C.gold, fontSize: 12, fontWeight: 700, cursor: "pointer" } }, L ? "📋 내 워치리스트" : "📋 My Watchlist"),
     React.createElement("button", { onClick: () => setScreenerMode("universe"), style: { padding: "7px 18px", borderRadius: 8, border: "1px solid " + (screenerMode === "universe" ? C.navy : C.navy + "55"), background: screenerMode === "universe" ? "linear-gradient(135deg," + C.navy + "," + C.slate + ")" : "transparent", color: screenerMode === "universe" ? "#fff" : C.navy, fontSize: 12, fontWeight: 700, cursor: "pointer" } }, L ? "🌐 전체 시장 스캔" : "🌐 Market Universe"),
-    React.createElement("span", { style: { fontSize: 11, color: C.textDim, marginLeft: 4 } }, screenerMode === "watchlist" ? (L ? "워치리스트 종목만 필터링" : "Filter your watchlist stocks") : (L ? "S&P 500 전체 종목 실시간 스캔 (Graham 기준 포함)" : "Scan the full S&P 500 live — with Graham criteria filters"))
+    React.createElement("button", { onClick: () => setScreenerMode("buySignals"), style: { padding: "7px 18px", borderRadius: 8, border: "1px solid " + (screenerMode === "buySignals" ? C.emerald : C.emerald + "55"), background: screenerMode === "buySignals" ? "linear-gradient(135deg," + C.emerald + ",#15803d)" : "transparent", color: screenerMode === "buySignals" ? "#fff" : C.emerald, fontSize: 12, fontWeight: 700, cursor: "pointer" } }, L ? "🎯 Buy 신호 대시보드" : "🎯 Buy Signals"),
+    React.createElement("span", { style: { fontSize: 11, color: C.textDim, marginLeft: 4 } }, screenerMode === "watchlist" ? (L ? "워치리스트 종목만 필터링" : "Filter your watchlist stocks") : screenerMode === "universe" ? (L ? "S&P 500 전체 종목 실시간 스캔 (Graham 기준 포함)" : "Scan the full S&P 500 live — with Graham criteria filters") : (L ? "Buffett+Ackman+Williams 통합 Buy 점수 — 시장 밸류에이션 포함" : "Combined Buffett+Ackman+Williams Buy score with market valuation"))
   ),
   screenerMode === "universe" && React.createElement(UniverseScreener, { L, initialSig: tierFilter !== "All" ? tierFilter : null, key: "univ-" + tierFilter }),
+  screenerMode === "buySignals" && React.createElement(BuySignalsDashboard, { enriched, L }),
   screenerMode === "watchlist" && React.createElement(Card, { style: { marginBottom: 18, padding: 0, overflow: "hidden", border: "1px solid " + C.gold + "44" } },
     React.createElement("div", { style: { padding: "10px 16px", background: "linear-gradient(135deg,#1c1917,#292524)", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center" } },
       React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
@@ -6032,4 +6193,157 @@ function Dashboard() {
       width: 80,
       fontWeight: 600
     }
-  }, n), /*#__PURE__*/React.createElement
+  }, n), /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 35,
+      color: C.gold
+    }
+  }, p), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: C.textDim,
+      fontSize: 10
+    }
+  }, d)))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h4", {
+    style: {
+      color: C.cyan,
+      fontSize: 12,
+      margin: "0 0 8px"
+    }
+  }, "QUANT (40%)"), [["Williams %R", "20pts", "Manual input"], ["A/D Line", "15pts", "Manual input"], ["Momentum", "15pts", "6m price return"], ["Sentiment", "15pts", "Manual input"], ["COT Index", "15pts", "Manual input"], ["6m Mom", "10pts", "YF chart calc"], ["Pattern", "10pts", "Manual input"]].map(([n, p, d]) => /*#__PURE__*/React.createElement("div", {
+    key: n,
+    style: {
+      display: "flex",
+      gap: 6,
+      marginBottom: 6,
+      fontSize: 11
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 80,
+      fontWeight: 600
+    }
+  }, n), /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 35,
+      color: C.cyan
+    }
+  }, p), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: C.textDim,
+      fontSize: 10
+    }
+  }, d)))))), /*#__PURE__*/React.createElement(Card, null, /*#__PURE__*/React.createElement("h3", {
+    style: {
+      color: C.crimson,
+      fontSize: 14,
+      fontWeight: 700,
+      margin: "0 0 12px"
+    }
+  }, "Sell Criteria (2+ triggers = Auto-Sell)"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", null, ["ROE < 12%", "D/E > 1.2x", "Gross margin < 35%", "ROIC < 7%", "FCF yield < 1%", "Price > DCF +10%", "EV/EBIT > 25x"].map(s => /*#__PURE__*/React.createElement("div", {
+    key: s,
+    style: {
+      fontSize: 11,
+      color: C.textMuted,
+      marginBottom: 4,
+      paddingLeft: 12,
+      borderLeft: "2px solid " + C.crimson + "33"
+    }
+  }, "\u2022 ", s))), /*#__PURE__*/React.createElement("div", null, ["Williams %R > -20 (overbought)", "A/D distribution", "Sentiment WSI > 75", "6m momentum negative"].map(s => /*#__PURE__*/React.createElement("div", {
+    key: s,
+    style: {
+      fontSize: 11,
+      color: C.textMuted,
+      marginBottom: 4,
+      paddingLeft: 12,
+      borderLeft: "2px solid " + C.cyan + "33"
+    }
+  }, "\u2022 ", s))))))), showQfsModal && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "fixed", top: 0, left: 0, width: "100%", height: "100%",
+      background: "rgba(0,0,0,0.65)", display: "flex", alignItems: "center",
+      justifyContent: "center", zIndex: 99999
+    },
+    onClick: () => setShowQfsModal(false)
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: C.card, border: "1px solid " + C.border, borderRadius: 12,
+      padding: 28, maxWidth: 520, width: "90%",
+      boxShadow: "0 12px 48px rgba(0,0,0,0.5)"
+    },
+    onClick: e => e.stopPropagation()
+  },
+    /*#__PURE__*/React.createElement("h2", {
+      style: { color: C.gold, fontSize: 18, fontWeight: 700, margin: "0 0 8px" }
+    }, "⚙️ QuickFS API Key 설정"),
+    /*#__PURE__*/React.createElement("p", {
+      style: { fontSize: 13, color: C.textMid, margin: "0 0 6px", lineHeight: 1.6 }
+    },
+      "무료 키 발급: ",
+      /*#__PURE__*/React.createElement("a", {
+        href: "https://quickfs.net", target: "_blank", rel: "noopener noreferrer",
+        style: { color: C.gold }
+      }, "quickfs.net"),
+      " → 회원가입 → API Keys"
+    ),
+    /*#__PURE__*/React.createElement("p", {
+      style: { fontSize: 12, color: C.textMuted, margin: "0 0 14px", lineHeight: 1.5,
+               background: C.gold + "11", padding: "8px 10px", borderRadius: 6 }
+    }, "📊 무료: 월 500 calls · 캐시 7일 적용 → 실제 사용량 최소화",
+       /*#__PURE__*/React.createElement("br", null),
+      "키 미설정 시 yfinance 데이터로 자동 폴백됩니다."
+    ),
+    /*#__PURE__*/React.createElement("input", {
+      type: "text",
+      value: qfsKeyInput,
+      onChange: e => setQfsKeyInput(e.target.value),
+      onKeyDown: e => { if (e.key === "Enter") { localStorage.setItem("qfs_api_key", qfsKeyInput.trim()); setShowQfsModal(false); setApiMsg("✓ QuickFS API 키 저장됨"); } },
+      placeholder: "QuickFS API 키를 붙여넣으세요",
+      style: {
+        width: "100%", padding: "10px 12px", borderRadius: 8,
+        border: "1px solid " + C.border, background: "#1c191722",
+        color: "#fff", fontSize: 13, marginBottom: 12,
+        boxSizing: "border-box", fontFamily: "monospace"
+      }
+    }),
+    getQFSKey() && /*#__PURE__*/React.createElement("p", {
+      style: { fontSize: 11, color: C.emerald, margin: "0 0 12px" }
+    }, "✓ 현재 키: ", getQFSKey().substring(0, 8), "..."),
+    /*#__PURE__*/React.createElement("div", { style: { display: "flex", gap: 8, justifyContent: "flex-end" } },
+      /*#__PURE__*/React.createElement("button", {
+        onClick: () => setShowQfsModal(false),
+        style: { padding: "8px 16px", borderRadius: 6, border: "1px solid " + C.border,
+                 background: "transparent", color: C.textMid, fontSize: 12, fontWeight: 600, cursor: "pointer" }
+      }, "취소"),
+      /*#__PURE__*/React.createElement("button", {
+        onClick: async () => {
+          if (qfsKeyInput.trim()) {
+            localStorage.setItem("qfs_api_key", qfsKeyInput.trim());
+            setShowQfsModal(false);
+            setApiMsg("✓ QuickFS API 키 저장됨 — 서버 연결 테스트 중...");
+            try {
+              const r = await apiFetch(`${PROXY}/qfs-test`);
+              const j = await r.json();
+              setApiMsg(j.ok ? "✓ " + j.msg : "⚠️ " + j.msg);
+            } catch(e) { setApiMsg("⚠️ server.py가 실행 중이어야 QuickFS를 사용할 수 있습니다"); }
+          }
+        },
+        style: { padding: "8px 16px", borderRadius: 6, border: "none",
+                 background: "linear-gradient(135deg," + C.gold + "," + C.goldBright + ")",
+                 color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }
+      }, "저장 & 테스트")
+    )
+  )), selected && /*#__PURE__*/React.createElement(StockDetail, {
+    stock: selected,
+    onClose: () => setSelected(null)
+  })));
+}
+document.getElementById("ls").style.display="none";
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(React.createElement(Dashboard, null));
+</script></body></html>

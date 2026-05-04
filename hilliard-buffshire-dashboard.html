@@ -3972,6 +3972,20 @@ const MarketOverview = ({ enriched = [], L = false, searchedStock = null }) => {
         : curCAPE >= 17
           ? { label: "공정가치 🟡", color: C.gold, bg: C.gold + "12" }
           : { label: "저평가 🟢", color: C.emerald, bg: C.emerald + "12" };
+  /* 차트 내 이벤트 어노테이션 — 레이블 박스 + 화살표 */
+  const makeEvLabel = (text, color, yTop) => ({
+    content: (lp) => {
+      if (!lp || !lp.viewBox) return null;
+      const { x } = lp.viewBox;
+      const bw = 68, bh = 16, y = yTop;
+      return CE("g", null,
+        CE("rect", { x: x - bw / 2, y, width: bw, height: bh, rx: 4, fill: color + "28", stroke: color, strokeWidth: 1 }),
+        CE("text", { x, y: y + 11, textAnchor: "middle", fill: color, fontSize: 8.5, fontWeight: "bold" }, text),
+        CE("line", { x1: x, y1: y + bh, x2: x, y2: y + bh + 12, stroke: color, strokeWidth: 1.5 }),
+        CE("polygon", { points: (x - 4) + "," + (y + bh + 12) + " " + (x + 4) + "," + (y + bh + 12) + " " + x + "," + (y + bh + 18), fill: color })
+      );
+    }
+  });
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
@@ -4061,11 +4075,10 @@ const MarketOverview = ({ enriched = [], L = false, searchedStock = null }) => {
             /* \uAC80\uC0C9 \uC885\uBAA9 P/E \uC120 */
             searchedStock && searchedStock.pe > 0 && CE(ReferenceLine, { y: searchedStock.pe, stroke: C.navy, strokeDasharray: "4 2", strokeWidth: 2,
               label: { value: searchedStock.ticker + " P/E " + searchedStock.pe.toFixed(1), fill: C.navy, fontSize: 9, position: "insideBottomRight" } }),
-            /* \uC218\uC9C1 \uC774\uBCA4\uD2B8\uC120 */
-            CE(ReferenceLine, { x: "2000", stroke: "#ef4444", strokeDasharray: "4 2", strokeWidth: 1.5 }),
-            CE(ReferenceLine, { x: "2008", stroke: "#dc2626", strokeDasharray: "4 2", strokeWidth: 1.5 }),
-            CE(ReferenceLine, { x: "2020", stroke: "#7c3aed", strokeDasharray: "4 2", strokeWidth: 1.5 }),
-            CE(ReferenceLine, { x: "2022", stroke: "#f97316", strokeDasharray: "4 2", strokeWidth: 1.5 }),
+            /* \uC774\uBCA4\uD2B8 \uC5B4\uB178\uD14C\uC774\uC158: \uB808\uC774\uBE14 \uBC15\uC2A4 + \uD654\uC0B4\uD45C */
+            CE(ReferenceLine, { x: "2000", stroke: "#ef4444", strokeDasharray: "2 3", strokeWidth: 0.8, label: makeEvLabel("\uB2F7\uCEF4 \uBC84\uBE14 '00", "#ef4444", 6) }),
+            CE(ReferenceLine, { x: "2008", stroke: "#dc2626", strokeDasharray: "2 3", strokeWidth: 0.8, label: makeEvLabel("\uAE08\uC735\uC704\uAE30 '08", "#dc2626", 44) }),
+            CE(ReferenceLine, { x: "2020", stroke: "#7c3aed", strokeDasharray: "2 3", strokeWidth: 0.8, label: makeEvLabel("COVID-19 '20", "#7c3aed", 6) }),
             CE(Area, { type: "monotone", dataKey: "v", stroke: C.gold, strokeWidth: 2.5, fill: "url(#capeGrad)", dot: false, activeDot: { r: 5, fill: C.gold, stroke: C.card, strokeWidth: 2 } })
           )
         )
@@ -4082,19 +4095,7 @@ const MarketOverview = ({ enriched = [], L = false, searchedStock = null }) => {
             CE("span", null, leg.label)
           )
         ),
-        CE("span", { style: { fontSize: 10, color: C.textDim, fontWeight: 600, marginLeft: 8 } }, "\u2502 \uC774\uBCA4\uD2B8:"),
-        ...[
-          { color: "#ef4444", label: "'00 \uB2F7\uCEF4 \uBC84\uBE14" },
-          { color: "#dc2626", label: "'08 GFC" },
-          { color: "#7c3aed", label: "'20 COVID" },
-          { color: "#f97316", label: "'22 \uC57D\uC138\uC7A5" }
-        ].map(ev =>
-          CE("div", { key: ev.label, style: { display: "flex", alignItems: "center", gap: 4, fontSize: 10 } },
-            CE("div", { style: { width: 2, height: 12, background: ev.color, borderRadius: 1 } }),
-            CE("span", { style: { color: ev.color, fontWeight: 600 } }, ev.label)
-          )
-        ),
-        searchedStock && searchedStock.pe > 0 && CE("div", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 10, marginLeft: 4 } },
+        searchedStock && searchedStock.pe > 0 && CE("div", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 10, marginLeft: 8 } },
           CE("div", { style: { width: 16, borderTop: "2px dashed " + C.navy } }),
           CE("span", { style: { color: C.navy, fontWeight: 700 } }, searchedStock.ticker + " P/E " + searchedStock.pe.toFixed(1))
         )

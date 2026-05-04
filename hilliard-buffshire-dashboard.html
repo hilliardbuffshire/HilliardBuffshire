@@ -146,7 +146,12 @@ const {
   PieChart,
   Pie,
   Cell,
-  CartesianGrid
+  CartesianGrid,
+  AreaChart,
+  Area,
+  LineChart,
+  Line,
+  ReferenceLine
 } = Recharts;
 
 // ── COLOR THEME ──────────────────────────────────────────────
@@ -180,6 +185,17 @@ const IDX_FCF = {
   nasdaq100: 14.20,
   dow30: 22.80
 };
+// Shiller CAPE ratio — annual (Dec year-end, approx). Source: Robert Shiller / multpl.com
+const CAPE_HIST = [
+  {y:"1990",v:16.0},{y:"1991",v:20.4},{y:"1992",v:20.2},{y:"1993",v:21.4},{y:"1994",v:18.2},
+  {y:"1995",v:24.5},{y:"1996",v:27.2},{y:"1997",v:31.3},{y:"1998",v:39.8},{y:"1999",v:43.3},
+  {y:"2000",v:44.2},{y:"2001",v:37.0},{y:"2002",v:22.9},{y:"2003",v:26.4},{y:"2004",v:27.7},
+  {y:"2005",v:27.0},{y:"2006",v:27.3},{y:"2007",v:26.2},{y:"2008",v:15.2},{y:"2009",v:20.5},
+  {y:"2010",v:22.9},{y:"2011",v:20.0},{y:"2012",v:22.1},{y:"2013",v:25.6},{y:"2014",v:27.2},
+  {y:"2015",v:26.3},{y:"2016",v:27.9},{y:"2017",v:32.3},{y:"2018",v:28.0},{y:"2019",v:30.8},
+  {y:"2020",v:33.4},{y:"2021",v:38.3},{y:"2022",v:27.8},{y:"2023",v:31.0},{y:"2024",v:36.0},
+  {y:"2026 ★",v:35.5}
+];
 
 // ── QuickFS + server.py ────────────────────────────────────────────
 // QuickFS 무료 키 발급: https://quickfs.net (500 calls/month, 캐시 7일로 충분)
@@ -3924,31 +3940,35 @@ const MarketOverview = ({ enriched = [], L = false }) => {
     setError("");
     try {
       const syms = ["^GSPC", "^DJI", "^IXIC", "^RUT", "^VIX", "^TNX"];
-      const results = await Promise.all(syms.map(s => fetch(`${YF_CHART}/${encodeURIComponent(s)}?interval=1d&range=5d`, {
-        headers: {
-          Accept: "application/json"
-        }
-      }).then(r => r.json()).catch(() => null)));
-      const parsed = results.map((r, i) => {
-        if (!r || !r.chart || !r.chart.result) return defaultIndices[i];
-        const meta = r.chart.result[0].meta;
-        const prev = meta.chartPreviousClose || meta.regularMarketPreviousClose || meta.previousClose;
-        const curr = meta.regularMarketPrice || meta.price;
-        const pct = prev && curr ? (curr - prev) / prev * 100 : 0;
-        return {
-          symbol: syms[i],
-          name: defaultIndices[i].name,
-          price: curr || defaultIndices[i].price,
-          changesPercentage: parseFloat(pct.toFixed(2))
-        };
-      });
-      setIndices(parsed);
+      const results = await Promise.all(syms.map(async (s, i) => {
+        try {
+          const r = await apiFetch(`${PROXY}/yf?ticker=${encodeURIComponent(s)}`);
+          const d = await r.json();
+          const price = d.price || d.regularMarketPrice || defaultIndices[i].price;
+          const pct   = d.changePercent || d.regularMarketChangePercent || d.changesPercentage || 0;
+          return { symbol: s, name: defaultIndices[i].name, price, changesPercentage: parseFloat(pct.toFixed(2)) };
+        } catch (e2) { return defaultIndices[i]; }
+      }));
+      setIndices(results);
     } catch (e) {
       setError(e.message);
     }
     setLoading(false);
   };
   const disp = indices || defaultIndices;
+  const CE = React.createElement;
+  const curCAPE = 35.5;
+  const capeVsMean = ((curCAPE - 17.0) / 17.0 * 100).toFixed(0);
+  const impliedRet = (100 / curCAPE).toFixed(1);
+  const capeZone = curCAPE >= 40
+    ? { label: "버블 영역 🫧", color: "#ef4444", bg: "#ef444415" }
+    : curCAPE >= 35
+      ? { label: "고가 영역 🔴", color: C.crimson, bg: C.crimson + "12" }
+      : curCAPE >= 25
+        ? { label: "고평가 🟠", color: C.orange, bg: C.orange + "12" }
+        : curCAPE >= 17
+          ? { label: "공정가치 🟡", color: C.gold, bg: C.gold + "12" }
+          : { label: "저평가 🟢", color: C.emerald, bg: C.emerald + "12" };
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
@@ -3985,108 +4005,106 @@ const MarketOverview = ({ enriched = [], L = false }) => {
       fontSize: 12,
       marginBottom: 16
     }
-  }, error), /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: 10,
-      borderRadius: 8,
-      background: C.goldBg,
-      border: "1px solid " + C.gold + "33",
-      color: C.textMid,
-      fontSize: 12,
-      marginBottom: 16
-    }
-  }, "\uD83D\uDCE1 Click \"Refresh Market\" for live index prices."), /*#__PURE__*/React.createElement(Card, {
-    style: {
-      marginBottom: 20,
-      padding: 14,
-      border: "1px solid " + C.gold + "33",
-      background: C.goldBg
-    }
-  }, /*#__PURE__*/React.createElement("h3", {
-    style: {
-      color: C.gold,
-      fontSize: 13,
-      fontWeight: 700,
-      margin: "0 0 12px"
-    }
-  }, "Index Average FCF/Share Benchmarks", /*#__PURE__*/React.createElement(HelpTip, {
-    text: TIPS.fcfShare
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "grid",
-      gridTemplateColumns: "repeat(3,1fr)",
-      gap: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      textAlign: "center",
-      padding: 12,
-      background: C.card,
-      borderRadius: 10
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 10,
-      color: C.textDim
-    }
-  }, "S&P 500 Avg"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 24,
-      fontWeight: 700,
-      color: C.emerald
-    }
-  }, "$", IDX_FCF.sp500), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 10,
-      color: C.textMuted
-    }
-  }, "per share")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      textAlign: "center",
-      padding: 12,
-      background: C.card,
-      borderRadius: 10
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 10,
-      color: C.textDim
-    }
-  }, "NASDAQ 100 Avg"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 24,
-      fontWeight: 700,
-      color: C.cyan
-    }
-  }, "$", IDX_FCF.nasdaq100), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 10,
-      color: C.textMuted
-    }
-  }, "per share")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      textAlign: "center",
-      padding: 12,
-      background: C.card,
-      borderRadius: 10
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 10,
-      color: C.textDim
-    }
-  }, "Dow 30 Avg"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 24,
-      fontWeight: 700,
-      color: C.navy
-    }
-  }, "$", IDX_FCF.dow30), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 10,
-      color: C.textMuted
-    }
-  }, "per share")))), /*#__PURE__*/React.createElement("div", {
+  }, error),
+
+  /* \u2500\u2500 SHILLER CAPE: \uC5ED\uC0AC\uC801 \uC2DC\uC7A5 \uBC38\uB958\uC5D0\uC774\uC158 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+  CE(React.Fragment, null,
+    CE(Card, { style: { marginBottom: 16, padding: "18px 22px", border: "1px solid " + C.gold + "33" } },
+      CE("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16, flexWrap: "wrap", gap: 12 } },
+        CE("div", null,
+          CE("h3", { style: { color: C.gold, fontSize: 14, fontWeight: 800, margin: "0 0 5px" } },
+            "\uD83D\uDCC8 Shiller CAPE Ratio \u2014 S&P 500 \uC5ED\uC0AC\uC801 \uBC38\uB958\uC5D0\uC774\uC158 (1990\u20132026)"),
+          CE("div", { style: { fontSize: 11, color: C.textDim, lineHeight: 1.6 } },
+            "10\uB144 \uD3C9\uADE0 \uC2E4\uC9C8 \uC774\uC775 \uAE30\uBC18 \uC8FC\uAC00\uC218\uC775\uBE44\uC728 (CAPE). \uC5ED\uC0AC\uC801 \uD3C9\uADE0: ~17 | \uD604\uC7AC: ",
+            CE("span", { style: { color: capeZone.color, fontWeight: 800, fontSize: 13 } }, curCAPE.toFixed(1)),
+            CE("span", { style: { color: C.textDim, fontSize: 10 } }, " (" + capeZone.label + ")")
+          )
+        ),
+        CE("div", { style: { background: capeZone.bg, border: "1px solid " + capeZone.color + "50", borderRadius: 12, padding: "12px 20px", textAlign: "center", minWidth: 90 } },
+          CE("div", { style: { fontSize: 32, fontWeight: 900, color: capeZone.color, lineHeight: 1 } }, curCAPE.toFixed(1)),
+          CE("div", { style: { fontSize: 10, color: capeZone.color, fontWeight: 700, marginTop: 4 } }, capeZone.label),
+          CE("div", { style: { fontSize: 9, color: C.textDim, marginTop: 2 } }, "\uD604\uC7AC CAPE")
+        )
+      ),
+      CE("div", { style: { height: 260 } },
+        CE(ResponsiveContainer, null,
+          CE(AreaChart, { data: CAPE_HIST, margin: { top: 10, right: 55, left: -15, bottom: 0 } },
+            CE("defs", null,
+              CE("linearGradient", { id: "capeGrad", x1: "0", y1: "0", x2: "0", y2: "1" },
+                CE("stop", { offset: "5%", stopColor: C.gold, stopOpacity: 0.28 }),
+                CE("stop", { offset: "95%", stopColor: C.gold, stopOpacity: 0.02 })
+              )
+            ),
+            CE(CartesianGrid, { strokeDasharray: "3 3", stroke: C.border, vertical: false }),
+            CE(XAxis, { dataKey: "y", stroke: C.textDim, fontSize: 9, tickLine: false, interval: 4 }),
+            CE(YAxis, { stroke: C.textDim, fontSize: 9, tickLine: false, domain: [5, 50], ticks: [10, 17, 25, 35, 44] }),
+            CE(RTooltip, {
+              content: ({ active, payload }) => {
+                if (!active || !payload || !payload[0]) return null;
+                const d = payload[0].payload;
+                const zone = d.v >= 40 ? "\uD83E\uDEE7 \uBC84\uBE14 \uC601\uC5ED" : d.v >= 35 ? "\uD83D\uDD34 \uACE0\uAC00 \uC601\uC5ED" : d.v >= 25 ? "\uD83D\uDFE0 \uACE0\uD3C9\uAC00" : d.v >= 17 ? "\uD83D\uDFE1 \uACF5\uC815\uAC00\uCE58" : "\uD83D\uDFE2 \uC800\uD3C9\uAC00";
+                return CE("div", { style: { background: C.card, border: "1px solid " + C.gold + "50", padding: "10px 14px", borderRadius: 10, boxShadow: "0 4px 12px rgba(0,0,0,.12)" } },
+                  CE("div", { style: { fontWeight: 700, color: C.gold, marginBottom: 4, fontSize: 12 } }, d.y),
+                  CE("div", { style: { fontSize: 18, fontWeight: 900, color: C.text } }, "CAPE: " + d.v.toFixed(1)),
+                  CE("div", { style: { fontSize: 11, color: C.textDim, marginTop: 3 } }, zone)
+                );
+              }
+            }),
+            CE(ReferenceLine, { y: 17, stroke: C.emerald, strokeDasharray: "5 3", strokeWidth: 1.5,
+              label: { value: "\uD3C9\uADE0 17", fill: C.emerald, fontSize: 9, position: "insideTopRight" } }),
+            CE(ReferenceLine, { y: 25, stroke: C.orange, strokeDasharray: "5 3", strokeWidth: 1.5,
+              label: { value: "\uACE0\uD3C9\uAC00 25", fill: C.orange, fontSize: 9, position: "insideTopRight" } }),
+            CE(ReferenceLine, { y: 35, stroke: C.crimson, strokeDasharray: "5 3", strokeWidth: 1.5,
+              label: { value: "\uC704\uD5D8 35", fill: C.crimson, fontSize: 9, position: "insideTopRight" } }),
+            CE(Area, { type: "monotone", dataKey: "v", stroke: C.gold, strokeWidth: 2.5, fill: "url(#capeGrad)", dot: false, activeDot: { r: 5, fill: C.gold, stroke: C.card, strokeWidth: 2 } })
+          )
+        )
+      ),
+      CE("div", { style: { display: "flex", gap: 20, marginTop: 12, flexWrap: "wrap" } },
+        [
+          { color: C.emerald, label: "\uC5ED\uC0AC\uC801 \uC7A5\uAE30 \uD3C9\uADE0 (17) \u2014 \uACF5\uC815\uAC00\uCE58 \uAE30\uC900\uC120" },
+          { color: C.orange,  label: "25 \u2014 \uC5ED\uC0AC\uC801 \uACE0\uD3C9\uAC00 \uC784\uACC4\uC810" },
+          { color: C.crimson, label: "35 \u2014 \uC704\uD5D8 \uACBD\uACC4 (2000\uB144 \uBC84\uBE14 \uD53C\uD06C: 44.2, 2021\uB144: 38.3)" }
+        ].map((leg, i) =>
+          CE("div", { key: i, style: { display: "flex", alignItems: "center", gap: 7, fontSize: 10, color: C.textDim } },
+            CE("div", { style: { width: 18, borderTop: "2px dashed " + leg.color } }),
+            CE("span", null, leg.label)
+          )
+        )
+      )
+    ),
+
+    /* 4 Valuation metric cards */
+    CE("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 20 } },
+      [
+        { icon: "\uD83D\uDCCA", label: "Shiller CAPE",
+          value: curCAPE.toFixed(1),
+          sub: "\uC5ED\uC0AC\uC801 \uD3C9\uADE0 \uB300\uBE44 +" + capeVsMean + "%",
+          color: capeZone.color },
+        { icon: "\uD83D\uDCC9", label: "\uC5ED\uC0AC\uC801 \uC0C1\uC704 \uBC31\uBD84\uC704",
+          value: "\uC0C1\uC704 ~10%",
+          sub: "1881\uB144 \uC774\uD6C4 \uAE30\uC900 (\uB9E4\uC6B0 \uB192\uC74C)",
+          color: C.crimson },
+        { icon: "\uD83D\uDCC8", label: "CAPE \uAE30\uBC18 \uAE30\uB300\uC218\uC775\uB960",
+          value: impliedRet + "%/yr",
+          sub: "\uD5A5\uD6C4 10\uB144 \uC2E4\uC9C8 \uCD94\uC815 (1/CAPE)",
+          color: parseFloat(impliedRet) >= 5 ? C.emerald : parseFloat(impliedRet) >= 3 ? C.orange : C.crimson },
+        { icon: "\uD83E\uDEE7", label: "vs 2000\uB144 \uBC84\uBE14 \uD53C\uD06C",
+          value: ((curCAPE / 44.2) * 100).toFixed(0) + "%",
+          sub: "2000\uB144 CAPE 44.2 = 100%",
+          color: C.textMid }
+      ].map(({ icon, label, value, sub, color }) =>
+        CE(Card, { key: label, style: { padding: "14px 16px", border: "1px solid " + color + "35" } },
+          CE("div", { style: { fontSize: 16, marginBottom: 5 } }, icon),
+          CE("div", { style: { fontSize: 22, fontWeight: 900, color, lineHeight: 1.1 } }, value),
+          CE("div", { style: { fontSize: 10, fontWeight: 700, color: C.textDim, marginTop: 5 } }, label),
+          CE("div", { style: { fontSize: 9, color: C.textDim, marginTop: 3, lineHeight: 1.4 } }, sub)
+        )
+      )
+    )
+  ),
+
+  /*#__PURE__*/React.createElement("div", {
     style: {
       display: "grid",
       gridTemplateColumns: "repeat(6,1fr)",

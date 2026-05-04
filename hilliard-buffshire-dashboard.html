@@ -196,6 +196,7 @@ const CAPE_HIST = [
   {y:"2020",v:33.4},{y:"2021",v:38.3},{y:"2022",v:27.8},{y:"2023",v:31.0},{y:"2024",v:36.0},
   {y:"2026 ★",v:35.5}
 ];
+const CURRENT_CAPE = 35.5; // Shiller CAPE 현재값 — 필요시 업데이트
 
 // ── QuickFS + server.py ────────────────────────────────────────────
 // QuickFS 무료 키 발급: https://quickfs.net (500 calls/month, 캐시 7일로 충분)
@@ -3869,10 +3870,11 @@ const ValuationTab = ({ enriched = [], L }) => {
 };
 
 // ── MARKET OVERVIEW ───────────────────────────────────────────
-const MarketOverview = ({ enriched = [], L = false }) => {
+const MarketOverview = ({ enriched = [], L = false, searchedStock = null }) => {
   const [indices, setIndices] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [lastUpdated, setLastUpdated] = useState(null);
   const defaultIndices = [{
     symbol: "^GSPC",
     name: "S&P 500",
@@ -3950,6 +3952,7 @@ const MarketOverview = ({ enriched = [], L = false }) => {
         } catch (e2) { return defaultIndices[i]; }
       }));
       setIndices(results);
+      setLastUpdated(new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
     } catch (e) {
       setError(e.message);
     }
@@ -3982,21 +3985,15 @@ const MarketOverview = ({ enriched = [], L = false }) => {
       fontWeight: 700,
       margin: 0
     }
-  }, "Market Overview"), /*#__PURE__*/React.createElement("button", {
-    onClick: loadMarket,
-    disabled: loading,
-    style: {
-      padding: "8px 20px",
-      borderRadius: 8,
-      border: "none",
-      cursor: "pointer",
-      background: "linear-gradient(135deg," + C.gold + "," + C.goldBright + ")",
-      color: "#fff",
-      fontWeight: 700,
-      fontSize: 12,
-      opacity: loading ? 0.6 : 1
-    }
-  }, loading ? "Loading..." : "Refresh Market")), error && /*#__PURE__*/React.createElement("div", {
+  }, "Market Overview"), CE("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
+    lastUpdated && CE("span", { style: { fontSize: 10, color: C.textDim } }, "업데이트: " + lastUpdated),
+    CE("button", {
+      onClick: loadMarket, disabled: loading,
+      style: { padding: "8px 20px", borderRadius: 8, border: "none", cursor: loading ? "wait" : "pointer",
+                background: loading ? C.border : "linear-gradient(135deg," + C.gold + "," + C.goldBright + ")",
+                color: loading ? C.textDim : "#fff", fontWeight: 700, fontSize: 12, transition: "all .3s" }
+    }, loading ? "⏳ 로딩 중..." : "🔄 Refresh Market")
+  )), error && /*#__PURE__*/React.createElement("div", {
     style: {
       padding: 10,
       borderRadius: 8,
@@ -4012,12 +4009,16 @@ const MarketOverview = ({ enriched = [], L = false }) => {
     CE(Card, { style: { marginBottom: 16, padding: "18px 22px", border: "1px solid " + C.gold + "33" } },
       CE("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16, flexWrap: "wrap", gap: 12 } },
         CE("div", null,
-          CE("h3", { style: { color: C.gold, fontSize: 14, fontWeight: 800, margin: "0 0 5px" } },
+          CE("h3", { style: { color: C.gold, fontSize: 14, fontWeight: 800, margin: "0 0 6px" } },
             "\uD83D\uDCC8 Shiller CAPE Ratio \u2014 S&P 500 \uC5ED\uC0AC\uC801 \uBC38\uB958\uC5D0\uC774\uC158 (1990\u20132026)"),
-          CE("div", { style: { fontSize: 11, color: C.textDim, lineHeight: 1.6 } },
-            "10\uB144 \uD3C9\uADE0 \uC2E4\uC9C8 \uC774\uC775 \uAE30\uBC18 \uC8FC\uAC00\uC218\uC775\uBE44\uC728 (CAPE). \uC5ED\uC0AC\uC801 \uD3C9\uADE0: ~17 | \uD604\uC7AC: ",
-            CE("span", { style: { color: capeZone.color, fontWeight: 800, fontSize: 13 } }, curCAPE.toFixed(1)),
-            CE("span", { style: { color: C.textDim, fontSize: 10 } }, " (" + capeZone.label + ")")
+          CE("div", { style: { fontSize: 12, color: C.textMid, fontWeight: 600, marginBottom: 6 } },
+            "Cyclically Adjusted P/E \u00B7 10\uB144 \uD3C9\uADE0 \uC2E4\uC9C8\uC774\uC775 \uAE30\uC900 \uC8FC\uAC00\uC218\uC775\uBE44\uC728"),
+          CE("div", { style: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" } },
+            CE("span", { style: { fontSize: 12, color: C.textDim } }, "\uC5ED\uC0AC\uC801 \uD3C9\uADE0"),
+            CE("span", { style: { fontSize: 16, fontWeight: 900, color: C.emerald } }, "17.0"),
+            CE("span", { style: { fontSize: 12, color: C.textDim } }, "\u25B8 \uD604\uC7AC"),
+            CE("span", { style: { fontSize: 16, fontWeight: 900, color: capeZone.color } }, curCAPE.toFixed(1)),
+            CE("span", { style: { background: capeZone.bg, color: capeZone.color, padding: "3px 12px", borderRadius: 20, fontSize: 11, fontWeight: 800, border: "1px solid " + capeZone.color + "55" } }, capeZone.label)
           )
         ),
         CE("div", { style: { background: capeZone.bg, border: "1px solid " + capeZone.color + "50", borderRadius: 12, padding: "12px 20px", textAlign: "center", minWidth: 90 } },
@@ -4050,26 +4051,52 @@ const MarketOverview = ({ enriched = [], L = false }) => {
                 );
               }
             }),
-            CE(ReferenceLine, { y: 17, stroke: C.emerald, strokeDasharray: "5 3", strokeWidth: 1.5,
+            /* \uC218\uD3C9 \uAE30\uC900\uC120 */
+            CE(ReferenceLine, { y: 17, stroke: C.emerald, strokeDasharray: "6 3", strokeWidth: 1.5,
               label: { value: "\uD3C9\uADE0 17", fill: C.emerald, fontSize: 9, position: "insideTopRight" } }),
-            CE(ReferenceLine, { y: 25, stroke: C.orange, strokeDasharray: "5 3", strokeWidth: 1.5,
+            CE(ReferenceLine, { y: 25, stroke: C.orange, strokeDasharray: "6 3", strokeWidth: 1.5,
               label: { value: "\uACE0\uD3C9\uAC00 25", fill: C.orange, fontSize: 9, position: "insideTopRight" } }),
-            CE(ReferenceLine, { y: 35, stroke: C.crimson, strokeDasharray: "5 3", strokeWidth: 1.5,
+            CE(ReferenceLine, { y: 35, stroke: C.crimson, strokeDasharray: "6 3", strokeWidth: 1.5,
               label: { value: "\uC704\uD5D8 35", fill: C.crimson, fontSize: 9, position: "insideTopRight" } }),
+            /* \uAC80\uC0C9 \uC885\uBAA9 P/E \uC120 */
+            searchedStock && searchedStock.pe > 0 && CE(ReferenceLine, { y: searchedStock.pe, stroke: C.navy, strokeDasharray: "4 2", strokeWidth: 2,
+              label: { value: searchedStock.ticker + " P/E " + searchedStock.pe.toFixed(1), fill: C.navy, fontSize: 9, position: "insideBottomRight" } }),
+            /* \uC218\uC9C1 \uC774\uBCA4\uD2B8\uC120 */
+            CE(ReferenceLine, { x: "2000", stroke: "#ef4444", strokeDasharray: "4 2", strokeWidth: 1.5 }),
+            CE(ReferenceLine, { x: "2008", stroke: "#dc2626", strokeDasharray: "4 2", strokeWidth: 1.5 }),
+            CE(ReferenceLine, { x: "2020", stroke: "#7c3aed", strokeDasharray: "4 2", strokeWidth: 1.5 }),
+            CE(ReferenceLine, { x: "2022", stroke: "#f97316", strokeDasharray: "4 2", strokeWidth: 1.5 }),
             CE(Area, { type: "monotone", dataKey: "v", stroke: C.gold, strokeWidth: 2.5, fill: "url(#capeGrad)", dot: false, activeDot: { r: 5, fill: C.gold, stroke: C.card, strokeWidth: 2 } })
           )
         )
       ),
-      CE("div", { style: { display: "flex", gap: 20, marginTop: 12, flexWrap: "wrap" } },
-        [
-          { color: C.emerald, label: "\uC5ED\uC0AC\uC801 \uC7A5\uAE30 \uD3C9\uADE0 (17) \u2014 \uACF5\uC815\uAC00\uCE58 \uAE30\uC900\uC120" },
-          { color: C.orange,  label: "25 \u2014 \uC5ED\uC0AC\uC801 \uACE0\uD3C9\uAC00 \uC784\uACC4\uC810" },
-          { color: C.crimson, label: "35 \u2014 \uC704\uD5D8 \uACBD\uACC4 (2000\uB144 \uBC84\uBE14 \uD53C\uD06C: 44.2, 2021\uB144: 38.3)" }
+      CE("div", { style: { display: "flex", gap: 16, marginTop: 12, flexWrap: "wrap", alignItems: "center" } },
+        CE("span", { style: { fontSize: 10, color: C.textDim, fontWeight: 600 } }, "\u2500\u2500 \uAE30\uC900\uC120:"),
+        ...[
+          { color: C.emerald, label: "\uD3C9\uADE0 17 (\uACF5\uC815\uAC00\uCE58)" },
+          { color: C.orange,  label: "25 (\uACE0\uD3C9\uAC00 \uC784\uACC4)" },
+          { color: C.crimson, label: "35 (\uC704\uD5D8 \uACBD\uACC4)" }
         ].map((leg, i) =>
-          CE("div", { key: i, style: { display: "flex", alignItems: "center", gap: 7, fontSize: 10, color: C.textDim } },
-            CE("div", { style: { width: 18, borderTop: "2px dashed " + leg.color } }),
+          CE("div", { key: i, style: { display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: C.textDim } },
+            CE("div", { style: { width: 16, borderTop: "2px dashed " + leg.color } }),
             CE("span", null, leg.label)
           )
+        ),
+        CE("span", { style: { fontSize: 10, color: C.textDim, fontWeight: 600, marginLeft: 8 } }, "\u2502 \uC774\uBCA4\uD2B8:"),
+        ...[
+          { color: "#ef4444", label: "'00 \uB2F7\uCEF4 \uBC84\uBE14" },
+          { color: "#dc2626", label: "'08 GFC" },
+          { color: "#7c3aed", label: "'20 COVID" },
+          { color: "#f97316", label: "'22 \uC57D\uC138\uC7A5" }
+        ].map(ev =>
+          CE("div", { key: ev.label, style: { display: "flex", alignItems: "center", gap: 4, fontSize: 10 } },
+            CE("div", { style: { width: 2, height: 12, background: ev.color, borderRadius: 1 } }),
+            CE("span", { style: { color: ev.color, fontWeight: 600 } }, ev.label)
+          )
+        ),
+        searchedStock && searchedStock.pe > 0 && CE("div", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 10, marginLeft: 4 } },
+          CE("div", { style: { width: 16, borderTop: "2px dashed " + C.navy } }),
+          CE("span", { style: { color: C.navy, fontWeight: 700 } }, searchedStock.ticker + " P/E " + searchedStock.pe.toFixed(1))
         )
       )
     ),
@@ -4099,6 +4126,29 @@ const MarketOverview = ({ enriched = [], L = false }) => {
           CE("div", { style: { fontSize: 22, fontWeight: 900, color, lineHeight: 1.1 } }, value),
           CE("div", { style: { fontSize: 10, fontWeight: 700, color: C.textDim, marginTop: 5 } }, label),
           CE("div", { style: { fontSize: 9, color: C.textDim, marginTop: 3, lineHeight: 1.4 } }, sub)
+        )
+      )
+    ),
+    /* 검색 종목 vs 시장 비교 */
+    searchedStock && searchedStock.pe > 0 && CE(Card, { style: { padding: "14px 20px", border: "2px solid " + C.navy + "55", background: C.navy + "08", marginTop: 0 } },
+      CE("div", { style: { display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" } },
+        CE("span", { style: { fontSize: 18 } }, "🔍"),
+        CE("div", null,
+          CE("div", { style: { fontSize: 12, fontWeight: 700, color: C.navy, marginBottom: 3 } },
+            searchedStock.ticker + " vs 시장 CAPE 비교"),
+          CE("div", { style: { display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" } },
+            CE("span", { style: { fontSize: 13, color: C.textDim } }, "종목 P/E"),
+            CE("span", { style: { fontSize: 18, fontWeight: 900, color: C.navy } }, searchedStock.pe.toFixed(1)),
+            CE("span", { style: { fontSize: 13, color: C.textDim } }, "vs 시장 CAPE"),
+            CE("span", { style: { fontSize: 18, fontWeight: 900, color: capeZone.color } }, curCAPE.toFixed(1)),
+            (() => {
+              const diff = ((curCAPE - searchedStock.pe) / curCAPE * 100).toFixed(1);
+              const cheaper = parseFloat(diff) > 0;
+              return CE("span", { style: { background: cheaper ? C.emerald + "20" : C.crimson + "20", color: cheaper ? C.emerald : C.crimson, padding: "4px 14px", borderRadius: 20, fontWeight: 800, fontSize: 13, border: "1px solid " + (cheaper ? C.emerald : C.crimson) + "50" } },
+                cheaper ? "✅ 시장 대비 " + diff + "% 저렴" : "⚠️ 시장 대비 " + Math.abs(diff) + "% 비쌈"
+              );
+            })()
+          )
         )
       )
     )
@@ -4142,46 +4192,46 @@ const MarketOverview = ({ enriched = [], L = false }) => {
         marginTop: 4
       }
     }, up ? "+" : "", (idx.changesPercentage || 0).toFixed(2), "%"));
-  })), /*#__PURE__*/React.createElement(Card, null, /*#__PURE__*/React.createElement("h3", {
-    style: {
-      fontSize: 14,
-      fontWeight: 700,
-      margin: "0 0 16px"
-    }
-  }, "Sector Performance (demo data)"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      height: 280
-    }
-  }, /*#__PURE__*/React.createElement(ResponsiveContainer, null, /*#__PURE__*/React.createElement(BarChart, {
-    data: defaultSectors.map(s => ({
-      name: s.sector,
-      pct: parseFloat(s.changesPercentage) || 0
-    })),
-    layout: "vertical"
-  }, /*#__PURE__*/React.createElement(CartesianGrid, {
-    strokeDasharray: "3 3",
-    stroke: C.border
-  }), /*#__PURE__*/React.createElement(XAxis, {
-    type: "number",
-    stroke: C.textDim,
-    fontSize: 10,
-    tickFormatter: v => v + "%"
-  }), /*#__PURE__*/React.createElement(YAxis, {
-    dataKey: "name",
-    type: "category",
-    stroke: C.textDim,
-    fontSize: 10,
-    width: 110
-  }), /*#__PURE__*/React.createElement(RTooltip, {
-    contentStyle: ttStyle,
-    formatter: v => v.toFixed(2) + "%"
-  }), /*#__PURE__*/React.createElement(Bar, {
-    dataKey: "pct",
-    radius: [0, 4, 4, 0]
-  }, defaultSectors.map((s, i) => /*#__PURE__*/React.createElement(Cell, {
-    key: i,
-    fill: parseFloat(s.changesPercentage) >= 0 ? C.emerald : C.crimson
-  }))))))),
+  })),
+  React.createElement(Card, { style: { marginTop: 20, padding: "18px 22px", border: "1px solid " + C.gold + "33" } },
+    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 } },
+      React.createElement("h3", { style: { color: C.gold, fontSize: 14, fontWeight: 800, margin: 0 } }, "📋 역사적 시장 위기 & CAPE 비교"),
+      React.createElement("span", { style: { fontSize: 10, color: C.textDim } }, "현재 CAPE " + curCAPE.toFixed(1) + "를 과거 위기 시점과 비교")
+    ),
+    React.createElement("div", { style: { overflowX: "auto" } },
+      React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12 } },
+        React.createElement("thead", null,
+          React.createElement("tr", { style: { background: C.goldBg } },
+            ["시점", "이벤트", "CAPE", "S&P 500 변동", "평가"].map((h, i) =>
+              React.createElement("th", { key: i, style: { padding: "8px 12px", textAlign: i >= 2 ? "center" : "left", color: C.textMid, fontWeight: 700, fontSize: 11, borderBottom: "2px solid " + C.gold + "40" } }, h)
+            )
+          )
+        ),
+        React.createElement("tbody", null,
+          [
+            { year: "1999–2000", event: "닷컴 버블 피크", cape: 43.3, spChange: "+228% (5년 상승)", eval: "버블", color: "#ef4444" },
+            { year: "2001–2002", event: "닷컴 붕괴 저점", cape: 22.9, spChange: "−49% 폭락", eval: "매수 기회", color: C.emerald },
+            { year: "2007 초", event: "GFC 직전 고점", cape: 26.2, spChange: "+100% (5년 상승)", eval: "고평가", color: C.orange },
+            { year: "2009 초", event: "GFC 저점 (리먼)", cape: 13.3, spChange: "−57% 폭락", eval: "역대 저평가", color: C.emerald },
+            { year: "2020 3월", event: "COVID 급락 저점", cape: 24.0, spChange: "−34% 급락", eval: "단기 기회", color: C.emerald },
+            { year: "2021 말", event: "제로금리 과열 고점", cape: 38.3, spChange: "+100% 반등", eval: "과열", color: "#ef4444" },
+            { year: "2022 말", event: "금리인상 약세장 저점", cape: 27.8, spChange: "−25% 조정", eval: "저평가 진입", color: C.gold },
+            { year: "2026 현재 ★", event: "현재", cape: curCAPE, spChange: "—", eval: capeZone.label, color: capeZone.color, isNow: true }
+          ].map((row, i) =>
+            React.createElement("tr", { key: i, style: { borderBottom: "1px solid " + C.border, background: row.isNow ? capeZone.bg : i % 2 === 0 ? "transparent" : C.goldBg + "44" } },
+              React.createElement("td", { style: { padding: "9px 12px", fontWeight: row.isNow ? 800 : 600, color: row.isNow ? C.gold : C.text, whiteSpace: "nowrap" } }, row.year),
+              React.createElement("td", { style: { padding: "9px 12px", color: C.textMid, fontSize: 11 } }, row.event),
+              React.createElement("td", { style: { padding: "9px 12px", textAlign: "center", fontWeight: 900, fontSize: 16, color: row.color } }, row.cape),
+              React.createElement("td", { style: { padding: "9px 12px", textAlign: "center", color: C.textDim, fontSize: 11 } }, row.spChange),
+              React.createElement("td", { style: { padding: "9px 12px", textAlign: "center" } },
+                React.createElement("span", { style: { background: row.color + "22", color: row.color, padding: "3px 10px", borderRadius: 20, fontSize: 10, fontWeight: 700, border: "1px solid " + row.color + "40", whiteSpace: "nowrap" } }, row.eval)
+              )
+            )
+          )
+        )
+      )
+    )
+  ),
   React.createElement(Card, { style: { marginTop: 20, padding: 0, overflow: "hidden", border: "1px solid " + C.gold + "33" } },
     React.createElement("div", { style: { padding: "12px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center", background: C.goldBg } },
       React.createElement("h3", { style: { color: C.gold, fontSize: 14, fontWeight: 700, margin: 0 } },
@@ -4328,12 +4378,15 @@ const MarketOverview = ({ enriched = [], L = false }) => {
 const TickerSearch = ({
   onSelect,
   stocks,
-  onAddStock
+  onAddStock,
+  inMarketTab = false,
+  onStockSearched = null
 }) => {
   const [query, setQuery] = useState("");
   const [searchResult, setSearchResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [added, setAdded] = useState(false);
+  const clearSearch = () => { setSearchResult(null); setQuery(""); if (onStockSearched) onStockSearched(null); };
   const handleSearch = async () => {
     if (!query.trim()) return;
     setAdded(false);
@@ -4349,18 +4402,9 @@ const TickerSearch = ({
       const mos = (found.dcfIntrinsic > 0 && found.price > 0)
         ? ((found.dcfIntrinsic - found.price) / found.dcfIntrinsic * 100).toFixed(1)
         : null;
-      setSearchResult({
-        ...found,
-        valScore: val,
-        qualScore: qual,
-        quantScore: q,
-        composite,
-        sellSignals: sellSig,
-        tier,
-        mos,
-        inDb: true,
-        alreadyInList: true
-      });
+      const res = { ...found, valScore: val, qualScore: qual, quantScore: q, composite, sellSignals: sellSig, tier, mos, inDb: true, alreadyInList: true };
+      setSearchResult(res);
+      if (onStockSearched) onStockSearched({ ticker, pe: found.pe || null });
       return;
     }
     setLoading(true);
@@ -4376,25 +4420,10 @@ const TickerSearch = ({
       const mos = (mapped.dcfIntrinsic > 0 && mapped.price > 0)
         ? ((mapped.dcfIntrinsic - mapped.price) / mapped.dcfIntrinsic * 100).toFixed(1)
         : null;
-      setSearchResult({
-        ...mapped,
-        _raw: mapped,
-        valScore: val,
-        qualScore: qual,
-        quantScore: q,
-        composite,
-        sellSignals: sellSig,
-        tier,
-        mos,
-        inDb: true,
-        alreadyInList: false
-      });
+      setSearchResult({ ...mapped, _raw: mapped, valScore: val, qualScore: qual, quantScore: q, composite, sellSignals: sellSig, tier, mos, inDb: true, alreadyInList: false });
+      if (onStockSearched) onStockSearched({ ticker, pe: mapped.pe || null });
     } catch (err) {
-      setSearchResult({
-        ticker,
-        inDb: false,
-        error: err.message
-      });
+      setSearchResult({ ticker, inDb: false, error: err.message });
     }
     setLoading(false);
   };
@@ -4452,7 +4481,12 @@ const TickerSearch = ({
       fontSize: 13,
       cursor: loading ? "wait" : "pointer"
     }
-  }, loading ? "Analyzing..." : "Analyze")), searchResult && /*#__PURE__*/React.createElement("div", {
+  }, loading ? "Analyzing..." : "Analyze"),
+  searchResult && /*#__PURE__*/React.createElement("button", {
+    onClick: clearSearch,
+    title: "검색 초기화",
+    style: { padding: "10px 14px", borderRadius: 8, border: "1px solid " + C.border, background: "transparent", color: C.textDim, fontWeight: 700, fontSize: 14, cursor: "pointer" }
+  }, "✕"))), searchResult && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 14
     }
@@ -4900,6 +4934,7 @@ function Dashboard() {
   };
 
   const [tab, setTab] = useState("screener");
+  const [searchedStock, setSearchedStock] = useState(null);
   const [lang, setLang] = useState("EN");
   const L = lang === "KR";
   const sortBy_init = "composite";
@@ -5376,8 +5411,10 @@ function Dashboard() {
   }, /*#__PURE__*/React.createElement(TickerSearch, {
     onSelect: s => setSelected(s),
     stocks: stocks,
-    onAddStock: addStockToList
-  }), tab === "market" && /*#__PURE__*/React.createElement(MarketOverview, { enriched, L }), tab === "screener" && React.createElement(React.Fragment, null,
+    onAddStock: addStockToList,
+    inMarketTab: tab === "market",
+    onStockSearched: s => setSearchedStock(s)
+  }), tab === "market" && /*#__PURE__*/React.createElement(MarketOverview, { enriched, L, searchedStock }), tab === "screener" && React.createElement(React.Fragment, null,
   React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 18, alignItems: "center", flexWrap: "wrap" } },
     React.createElement("button", { onClick: () => setScreenerMode("universe"), style: { padding: "7px 18px", borderRadius: 8, border: "1px solid " + (screenerMode === "universe" ? C.navy : C.navy + "55"), background: screenerMode === "universe" ? "linear-gradient(135deg," + C.navy + "," + C.slate + ")" : "transparent", color: screenerMode === "universe" ? "#fff" : C.navy, fontSize: 12, fontWeight: 700, cursor: "pointer" } }, L ? "🌐 전체 시장 스캔" : "🌐 Market Universe"),
     React.createElement("button", { onClick: () => setScreenerMode("buySignals"), style: { padding: "7px 18px", borderRadius: 8, border: "1px solid " + (screenerMode === "buySignals" ? C.emerald : C.emerald + "55"), background: screenerMode === "buySignals" ? "linear-gradient(135deg," + C.emerald + ",#15803d)" : "transparent", color: screenerMode === "buySignals" ? "#fff" : C.emerald, fontSize: 12, fontWeight: 700, cursor: "pointer" } }, L ? "🎯 Buy 신호 대시보드" : "🎯 Buy Signals"),

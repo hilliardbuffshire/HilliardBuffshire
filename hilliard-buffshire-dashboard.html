@@ -4143,10 +4143,10 @@ const MarketOverview = ({ enriched = [], L = false, searchedStock = null }) => {
             searchedStock && searchedStock.pe > 0 && CE(ReferenceLine, { y: searchedStock.pe, stroke: C.navy, strokeDasharray: "4 2", strokeWidth: 2,
               label: { value: searchedStock.ticker + " P/E " + searchedStock.pe.toFixed(1), fill: C.navy, fontSize: 9, position: "insideBottomRight" } }),
             /* \uC774\uBCA4\uD2B8 \uC5B4\uB178\uD14C\uC774\uC158: \uB808\uC774\uBE14 \uBC15\uC2A4 + \uD654\uC0B4\uD45C */
-            CE(ReferenceLine, { x: "2000-03", stroke: "#ef4444", strokeDasharray: "2 3", strokeWidth: 0.8, label: makeEvLabel("\uB2F7\uCEF4 \uBC84\uBE14 '00", "#ef4444", 6) }),
-            CE(ReferenceLine, { x: "2008-09", stroke: "#dc2626", strokeDasharray: "2 3", strokeWidth: 0.8, label: makeEvLabel("\uAE08\uC735\uC704\uAE30 '08", "#dc2626", 44) }),
-            CE(ReferenceLine, { x: "2020-03", stroke: "#7c3aed", strokeDasharray: "2 3", strokeWidth: 0.8, label: makeEvLabel("COVID-19 '20", "#7c3aed", 6) }),
-            CE(ReferenceLine, { x: "2022-10", stroke: "#f97316", strokeDasharray: "2 3", strokeWidth: 0.8, label: makeEvLabel("\uAE08\uB9AC\uC778\uC0C1 \uC57D\uC138\uC7A5 '22", "#f97316", 44) }),
+            CE(ReferenceLine, { x: "1999-12", stroke: "#ef4444", strokeDasharray: "2 3", strokeWidth: 0.8, label: makeEvLabel("\uB2F7\uCEF4\uBC84\uBE14 CAPE \uCD5C\uACE0\uC810 '99", "#ef4444", 6) }),
+            CE(ReferenceLine, { x: "2007-10", stroke: "#dc2626", strokeDasharray: "2 3", strokeWidth: 0.8, label: makeEvLabel("GFC \uC2DC\uC791 '07", "#dc2626", 44) }),
+            CE(ReferenceLine, { x: "2020-02", stroke: "#7c3aed", strokeDasharray: "2 3", strokeWidth: 0.8, label: makeEvLabel("COVID \uD558\uB77D \uC2DC\uC791 '20", "#7c3aed", 6) }),
+            CE(ReferenceLine, { x: "2022-01", stroke: "#f97316", strokeDasharray: "2 3", strokeWidth: 0.8, label: makeEvLabel("\uAE08\uB9AC\uC778\uC0C1 \uC57D\uC138\uC7A5 \uC2DC\uC791 '22", "#f97316", 44) }),
             CE(Area, { type: "monotone", dataKey: "v", stroke: C.gold, strokeWidth: 2.5, fill: "url(#capeGrad)", dot: false, activeDot: { r: 5, fill: C.gold, stroke: C.card, strokeWidth: 2 } })
           )
         )

@@ -83,13 +83,14 @@ window.onerror=function(m,u,l){var e=document.getElementById('err');if(e){e.styl
 // ⚠ 아래 FB_CONFIG 값들을 Firebase Console에서 복사한 값으로 교체하세요
 // 설정 방법: https://console.firebase.google.com → 프로젝트 선택 → 웹앱 추가 → Config 복사
 const FB_CONFIG = {
-  apiKey:            "AIzaSyDeVwwhMZwLBuPkRwliXNKH6UHskMfk5Pk",
-  authDomain:        "hilliard-buffshire.firebaseapp.com",
-  projectId:         "hilliard-buffshire",
-  storageBucket:     "hilliard-buffshire.firebasestorage.app",
-  messagingSenderId: "677782688060",
-  appId:             "1:677782688060:web:b3a0ad7440dbc01cd84e39"
+  apiKey:            "AIzaSyDEPq3SqOCiltpmesT3vP9Jp7a_ujFou1k",
+  authDomain:        "daily-task-planner-9187f.firebaseapp.com",
+  projectId:         "daily-task-planner-9187f",
+  storageBucket:     "daily-task-planner-9187f.firebasestorage.app",
+  messagingSenderId: "309757618979",
+  appId:             "1:309757618979:web:79fbdc11fbfbcdffa9ba96"
 };
+const AUTH_DOMAIN = "@hilliard.buffshire.internal";
 const FB_READY = (typeof firebase !== 'undefined') && FB_CONFIG.apiKey !== "FILL_IN_API_KEY";
 let fbAuth = null, fbDb = null;
 if (FB_READY) {
@@ -107,14 +108,14 @@ function saveToCloud(uid, key, value) {
   if (!fbDb || !uid) return;
   clearTimeout(cloudSaveTimers[key]);
   cloudSaveTimers[key] = setTimeout(() => {
-    fbDb.collection('users').doc(uid).set({ [key]: value }, { merge: true })
+    fbDb.collection('hb_invest').doc(uid).set({ [key]: value }, { merge: true })
       .catch(e => console.warn('Firestore write:', e.message));
   }, 1500);
 }
 async function loadFromCloud(uid) {
   if (!fbDb || !uid) return null;
   try {
-    const snap = await fbDb.collection('users').doc(uid).get();
+    const snap = await fbDb.collection('hb_invest').doc(uid).get();
     return snap.exists ? snap.data() : null;
   } catch(e) { console.warn('Firestore read:', e.message); return null; }
 }
@@ -4960,6 +4961,11 @@ function Dashboard() {
   const [cloudData, setCloudData] = useState(null);
   const [authLoading, setAuthLoading] = useState(FB_READY);
   const [showAccountMenu, setShowAccountMenu] = useState(false);
+  const [showLoginForm, setShowLoginForm] = useState(false);
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPw, setLoginPw] = useState('');
+  const [loginErr, setLoginErr] = useState('');
+  const [loginTab, setLoginTab] = useState('login');
 
   useEffect(() => {
     if (!FB_READY || !fbAuth) { setAuthLoading(false); return; }
@@ -4996,6 +5002,28 @@ function Dashboard() {
       console.warn('Redirect failed, trying popup:', e.message);
       fbAuth.signInWithPopup(provider).catch(e2 => console.warn('Popup failed:', e2.message));
     });
+  };
+  const signInEmail = async (username, pw, tab, setErr) => {
+    if (!fbAuth) return false;
+    const email = username.toLowerCase().trim() + AUTH_DOMAIN;
+    try {
+      if (tab === 'login') {
+        await fbAuth.signInWithEmailAndPassword(email, pw);
+      } else {
+        await fbAuth.createUserWithEmailAndPassword(email, pw);
+      }
+      return true;
+    } catch(e) {
+      const msgs = {
+        'auth/user-not-found': '존재하지 않는 아이디',
+        'auth/wrong-password': '비밀번호 오류',
+        'auth/invalid-credential': '아이디 또는 비밀번호 오류',
+        'auth/email-already-in-use': '이미 사용 중인 아이디',
+        'auth/weak-password': '비밀번호 6자 이상'
+      };
+      setErr(msgs[e.code] || e.message);
+      return false;
+    }
   };
   const signOutUser = () => {
     if (fbAuth) fbAuth.signOut();
@@ -5414,23 +5442,94 @@ function Dashboard() {
   }, L ? "초기화" : "Reset"),
   FB_READY && /*#__PURE__*/React.createElement("div", {
     style: { position: "relative" }
-  }, !fbUser ? /*#__PURE__*/React.createElement("button", {
-    onClick: signInGoogle,
-    style: {
-      padding: "5px 10px",
-      borderRadius: 6,
-      border: "1px solid #4285F488",
-      background: "linear-gradient(135deg,#4285F4,#34A853)",
-      color: "#fff",
-      fontSize: 11,
-      fontWeight: 700,
-      cursor: "pointer",
-      display: "flex",
-      alignItems: "center",
-      gap: 6
-    }
-  }, /*#__PURE__*/React.createElement("span", { style: { fontSize: 13 } }, "G"),
-     authLoading ? (L ? "확인 중..." : "...") : (L ? "구글 로그인" : "Sign in")) :
+  }, !fbUser ? /*#__PURE__*/React.createElement(React.Fragment, null,
+    React.createElement("button", {
+      onClick: () => setShowLoginForm(v => !v),
+      style: {
+        padding: "5px 11px", borderRadius: 6,
+        border: "1px solid " + C.gold + "88",
+        background: "transparent", color: C.gold,
+        fontSize: 11, fontWeight: 700, cursor: "pointer"
+      }
+    }, authLoading ? (L ? "확인 중..." : "...") : (L ? "🔑 로그인" : "🔑 Sign in")),
+    showLoginForm && React.createElement("div", {
+      style: {
+        position: "absolute", top: 34, right: 0,
+        background: "#1c1917", border: "1px solid " + C.gold + "44",
+        borderRadius: 10, padding: 16, zIndex: 300,
+        minWidth: 250, boxShadow: "0 8px 24px #0008"
+      },
+      onClick: e => e.stopPropagation()
+    },
+      React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 12 } },
+        ["login", "register"].map(t => React.createElement("button", {
+          key: t,
+          onClick: () => setLoginTab(t),
+          style: {
+            flex: 1, padding: "4px 0", borderRadius: 6, fontSize: 11, fontWeight: 700,
+            border: "1px solid " + C.gold + (loginTab === t ? "ff" : "44"),
+            background: loginTab === t ? C.gold : "transparent",
+            color: loginTab === t ? "#000" : C.gold, cursor: "pointer"
+          }
+        }, t === "login" ? (L ? "로그인" : "Login") : (L ? "회원가입" : "Sign Up")))
+      ),
+      React.createElement("input", {
+        type: "text", placeholder: L ? "아이디" : "Username",
+        value: loginUsername, onChange: e => setLoginUsername(e.target.value),
+        style: {
+          width: "100%", padding: "6px 10px", borderRadius: 6,
+          border: "1px solid " + C.gold + "44", background: "#111",
+          color: "#fff", fontSize: 12, marginBottom: 8, boxSizing: "border-box"
+        }
+      }),
+      React.createElement("input", {
+        type: "password", placeholder: L ? "비밀번호" : "Password",
+        value: loginPw, onChange: e => setLoginPw(e.target.value),
+        onKeyDown: e => {
+          if(e.key === "Enter") {
+            signInEmail(loginUsername, loginPw, loginTab, setLoginErr)
+              .then(ok => { if(ok){ setShowLoginForm(false); setLoginUsername(''); setLoginPw(''); } });
+          }
+        },
+        style: {
+          width: "100%", padding: "6px 10px", borderRadius: 6,
+          border: "1px solid " + C.gold + "44", background: "#111",
+          color: "#fff", fontSize: 12, marginBottom: 8, boxSizing: "border-box"
+        }
+      }),
+      loginErr && React.createElement("div", {
+        style: { color: "#f87171", fontSize: 11, marginBottom: 8 }
+      }, loginErr),
+      React.createElement("button", {
+        onClick: () => {
+          signInEmail(loginUsername, loginPw, loginTab, setLoginErr)
+            .then(ok => { if(ok){ setShowLoginForm(false); setLoginUsername(''); setLoginPw(''); } });
+        },
+        style: {
+          width: "100%", padding: "7px 0", borderRadius: 6,
+          background: "linear-gradient(135deg," + C.gold + "," + C.goldBright + ")",
+          color: "#000", fontSize: 12, fontWeight: 700,
+          border: "none", cursor: "pointer", marginBottom: 8
+        }
+      }, loginTab === "login" ? (L ? "로그인" : "Login") : (L ? "계정 만들기" : "Create Account")),
+      React.createElement("div", {
+        style: { display: "flex", alignItems: "center", gap: 6, margin: "8px 0" }
+      },
+        React.createElement("div", { style: { flex: 1, height: 1, background: C.gold + "33" } }),
+        React.createElement("span", { style: { color: C.textDim, fontSize: 10 } }, "OR"),
+        React.createElement("div", { style: { flex: 1, height: 1, background: C.gold + "33" } })
+      ),
+      React.createElement("button", {
+        onClick: signInGoogle,
+        style: {
+          width: "100%", padding: "7px 0", borderRadius: 6,
+          background: "linear-gradient(135deg,#4285F4,#34A853)",
+          color: "#fff", fontSize: 12, fontWeight: 700,
+          border: "none", cursor: "pointer"
+        }
+      }, "G  Google")
+    )
+  ) :
   /*#__PURE__*/React.createElement("div", {
     style: { display: "flex", alignItems: "center", gap: 6, cursor: "pointer" },
     onClick: () => setShowAccountMenu(m => !m)
